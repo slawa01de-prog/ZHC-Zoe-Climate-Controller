@@ -1,0 +1,16 @@
+build/
+*.bin
+*.elf
+*.map
+*.hex
+*.tmp
+*.bak
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+secrets.*
+*.secret
+credentials.*
