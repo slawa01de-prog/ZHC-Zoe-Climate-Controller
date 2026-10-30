@@ -205,6 +205,7 @@ firmware/
 docs/
   SAFETY.md
   TESTING.md
+  INTERFACE_CONCEPT.md
 
 CHANGELOG.md
 README.md
