@@ -296,3 +296,223 @@ dokumentiert**.
 
 Bevor daraus eine reale Schnittstelle entsteht, müssen die entsprechenden
 Fahrzeugschaltpläne und Messwerte verifiziert werden.
+
+
+# Konkretes GPIO -> MOSFET -> Relais Interface
+
+> [!WARNING]
+> Diese Schaltung ist als **Niedervolt-Relais-Treiber** gedacht.
+> Sie beschreibt nicht die direkte Ansteuerung eines Hochvolt-PTC,
+> HV-Schützes oder anderer Hochenergie-Komponenten.
+
+## Ein Kanal
+
+Für jeden Ausgang H1/H2/H3 kann dieselbe Low-Side-Treiberstufe verwendet werden:
+
+```text
+ESP32-C3 GPIO
+     |
+     | 100...330 Ohm
+     v
+   Gate
+    |
+    +---- 10 kOhm ---- GND
+    |
+  N-MOSFET
+  logic-level
+    |
+ Source
+    |
+   GND
+
+Drain --------------------+
+                          |
+                      Relaisspule
+                          |
+                         +12 V
+```
+
+Parallel zur Relaisspule:
+
+```text
+                +12 V
+                  |
+                  +------|<|------+
+                  |   Flyback     |
+                  |    diode      |
+                  |               |
+             Relaisspule          |
+                  |               |
+                  +------ Drain ---+
+```
+
+Orientierung der Freilaufdiode:
+
+- Kathode an +12 V
+- Anode an MOSFET-Drain / Relaisspulen-Minus
+
+Im normalen Betrieb sperrt die Diode.
+Beim Abschalten der Spule begrenzt sie die induzierte Spannungsspitze.
+
+## Vereinfachtes Schaltbild
+
+```text
+ESP32-C3
+GPIO H1
+  |
+ [220R]
+  |
+  +---------- Gate Q1
+  |             |
+ [10k]         N-MOSFET
+  |             |
+ GND          Source
+                |
+               GND
+
+               Drain
+                 |
+                 +--------- Relay Coil -------- +12V
+                 |                               |
+                 +---------|<|------------------+
+                         Flyback diode
+```
+
+## Relaiskontakt
+
+Die MOSFET-Stufe schaltet ausschließlich die **Relaisspule**.
+
+Die eigentliche Last liegt elektrisch getrennt am Relaiskontakt:
+
+```text
+MOSFET-Seite:
+
+ESP32 -> MOSFET -> Relaisspule
+
+
+Kontaktseite:
+
+Versorgung/Signal ---- COM
+                       |
+                     Relay
+                       |
+                       NO ---- Last / OEM Low-Voltage Signal
+```
+
+Damit fließt der Laststrom nicht durch den ESP32 oder GPIO.
+
+## Drei Kanäle
+
+```text
+GPIO H1 -> MOSFET Q1 -> Relay K1
+GPIO H2 -> MOSFET Q2 -> Relay K2
+GPIO H3 -> MOSFET Q3 -> Relay K3
+```
+
+Jeder Kanal sollte besitzen:
+
+- Gate-Widerstand
+- Gate-Pulldown
+- Logic-Level N-MOSFET
+- Freilaufdiode an der Relaisspule
+- abgesicherte 12-V-Versorgung
+- definierte gemeinsame Masse, wenn keine galvanische Trennung verwendet wird
+
+## Warum Gate-Pulldown?
+
+Der Pulldown stellt sicher:
+
+```text
+ESP32 Reset
+GPIO hochohmig
+Bootphase
+Firmwarefehler
+
+=> MOSFET AUS
+=> Relais AUS
+```
+
+Das unterstützt das Fail-Low-Konzept.
+
+## MOSFET-Anforderungen
+
+Der MOSFET muss bei **3,3 V Gate-Spannung sicher durchschalten**.
+
+Wichtige Kriterien:
+
+- Logic-Level MOSFET
+- ausreichende Drain-Source-Spannungsfestigkeit
+- ausreichender Strom für die Relaisspule
+- niedriger RDS(on) bei 2,5...3,3 V Gate-Spannung
+- genügend Reserve für automotive Niedervolt-Umgebung
+
+Ein MOSFET, der nur mit 10 V Gate-Spannung spezifiziert ist, ist für einen
+direkten ESP32-GPIO ungeeignet.
+
+## Fahrzeugseitige Schutzmaßnahmen
+
+Bei Versorgung aus dem 12-V-Bordnetz sollte zusätzlich ein Schutzblock
+vorgesehen werden:
+
+```text
+12 V Fahrzeug
+     |
+   Sicherung
+     |
+ Verpolschutz
+     |
+ TVS / Transientenschutz
+     |
+     +---- Relaisspulen
+     |
+     +---- DC/DC -> ESP32
+```
+
+## Optional: galvanische Trennung
+
+Wenn die Fahrzeugseite elektrisch getrennt werden soll:
+
+```text
+ESP32 GPIO
+    |
+ Optokoppler
+    |
+ MOSFET-Treiber
+    |
+ Relaisspule
+```
+
+Dann muss die Fahrzeugseite eine eigene Versorgung und Masse besitzen.
+
+## Wichtig bei Relaisauswahl
+
+Vor Anschluss an ein reales Fahrzeug muss geprüft werden:
+
+- Spulenspannung des Relais
+- Spulenstrom
+- Kontaktstrom
+- Schaltspannung
+- Lastart
+- Einschaltstrom
+- induktive oder kapazitive Last
+- OEM-Diagnoseüberwachung
+
+Der Kontakt muss für die tatsächliche **Niedervolt-Last** ausgelegt sein.
+
+## Was diese Schaltung ausdrücklich nicht bedeutet
+
+Nicht:
+
+```text
+ESP32 -> MOSFET -> Hochvolt-PTC
+```
+
+Nicht:
+
+```text
+ESP32 -> MOSFET -> HV-Schütz ohne OEM-Freigabe
+```
+
+Die hier beschriebene Stufe ist nur ein möglicher **12-V-Relais-Treiber für
+Low-Voltage-Steuersignale oder Bench-Tests**.
+
