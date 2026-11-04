@@ -1,5 +1,23 @@
 # Changelog
 
+## V4.7 – Alpha / Web Control
+
+- Weboberfläche als Hauptbedienung erweitert.
+- Dashboard mit Temperatur, Modus, Heizstufe, Reglerleistung und Safety-Status.
+- OEM/AUTO/BOOST/MANUAL über Browser.
+- Solltemperatur, Totband und Restart-Differenz im Web einstellbar.
+- DS18B20-Rollenzuweisung und Offsets im Web.
+- Regler-, Heizstufen- und Safety-Parameter im Web.
+- Lernsystem im Web.
+- Diagnose und kontrollierter Fault-Reset.
+- Konfigurations-Backup und Restore.
+- Firmware-/Build-Anzeige.
+- Geschütztes OTA-Firmwareupdate bleibt erhalten.
+- Vor OTA werden eigene Heizanforderung und H1/H2/H3 abgeschaltet.
+- V4.6 bleibt als Rückfallversion erhalten.
+- Status: **Alpha / Testing only**.
+
+
 ## V4.6 – Alpha
 
 - WLAN Access Point `ZHC`
