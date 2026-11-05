@@ -231,11 +231,11 @@ Keine Passwörter, WLAN-Schlüssel oder sonstige Zugangsdaten veröffentlichen.
 Dieses Projekt wird ohne Zusicherungen oder Garantien bereitgestellt.
 Die Nutzung und Erprobung erfolgt ausschließlich auf eigene Verantwortung.
 
-## ZHC V4.7 – aktuelle Alpha-Version
+## ZHC V4.8 – aktuelle Alpha-Version
 
-V4.7 erweitert die Weboberfläche um Bedienung, Sensorverwaltung, Reglerparameter,
-Lernsystem, Diagnose, Konfigurations-Backup/Restore und OTA-Updates.
+V4.8 erweitert die Weboberfläche zusätzlich um eine Service-Diagnose für einzelne 3,3-V-/Bench-Ausgänge, RGB-LED, Taster und Sensorbus.
 
+- [Firmware V4.8](firmware/Zoe_Heater_Controller_V4_8.ino)
 - [Firmware V4.7](firmware/Zoe_Heater_Controller_V4_7.ino)
 - [Bedienungsanleitung V4.7](docs/USER_GUIDE_V4_7.md)
 - [Änderungsverlauf](CHANGELOG.md)
