@@ -1,5 +1,21 @@
 # Changelog
 
+## V4.8 – Alpha / Service-Diagnose
+
+- Neue Web-Seite **Service**.
+- H1 / GPIO8, H2 / GPIO9 und H3 / GPIO10 einzeln testbar.
+- Jeder Ausgangstest ist automatisch auf 2 Sekunden begrenzt.
+- Vor dem Ausgangstest wird die Regelung auf OEM gesetzt und der Reglerausgang auf 0 % gesetzt.
+- Ausgangstests sind bei Safety-Lock, FAILSAFE oder OTA gesperrt.
+- Zentraler **ALLE AUS**-Befehl.
+- RGB Rot / Grün / Blau einzeln für 3 Sekunden testbar.
+- Tasterstatus GPIO3 im Web sichtbar.
+- DS18B20-Scan und ROM-Adressen im Servicebereich.
+- Systemstatus mit Modus, Safety-Lock, Fehler, Reglerausgang, WLAN und IP.
+- H1/H2/H3 bleiben ausschließlich 3,3-V-Logik-/Bench-Ausgänge.
+
+
+
 ## V4.7 – Alpha / Web Control
 
 - Weboberfläche als Hauptbedienung erweitert.
