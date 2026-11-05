@@ -242,3 +242,54 @@ reboot
 
 V4.7 bleibt zunächst **Alpha / Testing only**.
 V4.6 bleibt als Rückfallversion im Repository erhalten.
+
+
+## Service-Diagnose (V4.8)
+
+Ab V4.8 gibt es den zusätzlichen Menüpunkt **Service**.
+
+### H1 / H2 / H3 einzeln testen
+
+- H1 = GPIO8
+- H2 = GPIO9
+- H3 = GPIO10
+
+Jeder Ausgangstest läuft maximal **2 Sekunden** und endet automatisch.
+
+Vor jedem Test setzt ZHC:
+- Betriebsart auf OEM
+- angeforderte Stufe auf 0
+- aktive Stufe auf 0
+- Reglerausgang auf 0 %
+- Integrator zurück
+
+Bei Safety-Lock, FAILSAFE oder laufendem OTA-Update sind die Ausgangstests gesperrt.
+
+Zusätzlich gibt es **ALLE AUS**.
+
+### RGB-Test
+
+Rot, Grün und Blau können jeweils für 3 Sekunden geprüft werden.
+
+### Taster
+
+GPIO3 wird angezeigt:
+- HIGH = frei
+- LOW = gedrückt
+
+### DS18B20
+
+Der 1-Wire-Bus an GPIO7 kann neu gescannt werden.
+Gefundene Sensoren werden mit Index und ROM-Adresse angezeigt.
+
+### Systemstatus
+
+Die Seite zeigt zusätzlich:
+- Modus
+- Safety-Lock
+- Fehler
+- Reglerausgang
+- WLAN-Status
+- IP-Adresse
+
+> Die Service-Ausgangstests sind ausschließlich für 3,3-V-/Niedervolt-Bench-Prüfungen vorgesehen.
