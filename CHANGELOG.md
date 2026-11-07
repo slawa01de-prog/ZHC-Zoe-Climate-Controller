@@ -1,5 +1,25 @@
 # Changelog
 
+## V4.8.2 – Alpha / PWM-Status & OEM-Sofortabschaltung
+
+- RGB-LED auf PWM-Statusanzeige erweitert.
+- OEM: langsames blaues Atmen.
+- AUTO: grün.
+- BOOST: gelb/orange pulsierend.
+- MANUAL: cyan.
+- Service-Ausgangstest: violett pulsierend.
+- Warnung: gelb blinkend.
+- Fehler / Safety-Lock: rot blinkend.
+- OTA: schnell blau pulsierend.
+- LED-Helligkeit softwareseitig begrenzt.
+- Wechsel auf OEM schaltet H1/H2/H3 sofort hart AUS.
+- Aktive und angeforderte Stufe werden dabei sofort auf 0 gesetzt.
+- Reglerausgang und Integrator werden beim OEM-Wechsel sofort zurückgesetzt.
+- Zentraler Abschaltpfad für OEM, Fehler, OTA und Service-STOP.
+- Service-Diagnose aus V4.8.1 bleibt vollständig erhalten.
+
+
+
 ## V4.8 – Alpha / Service-Diagnose
 
 - Neue Web-Seite **Service**.
