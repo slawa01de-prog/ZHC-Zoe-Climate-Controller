@@ -345,3 +345,28 @@ Der gleiche unmittelbare Abschaltpfad wird für folgende Situationen verwendet:
 Damit sollen H1/H2/H3 in allen Abschaltsituationen konsistent behandelt werden.
 
 > H1/H2/H3 sind weiterhin ausschließlich 3,3-V-Logik-/Niedervolt-Bench-Ausgänge.
+
+
+## LED-Stufenanzeige (V4.8.3)
+
+Ab V4.8.3 bleibt die jeweilige Modusfarbe als Grundlicht erhalten. Zusätzlich zeigt die RGB-LED die aktive Heizstufe durch helle Pulse an:
+
+- **Stufe 0:** keine Zusatzimpulse
+- **Stufe 1:** 1 heller Impuls
+- **Stufe 2:** 2 helle Impulse
+- **Stufe 3:** 3 helle Impulse
+
+Das Pulsmuster wiederholt sich ungefähr alle 4 Sekunden.
+
+### Grundfarben
+
+- **OEM:** blau atmend
+- **AUTO:** grün
+- **BOOST:** orange
+- **MANUAL:** cyan
+
+### Prioritäten
+
+Fehler-, Warn-, OTA- und Serviceanzeigen haben weiterhin Vorrang vor der normalen Modus-/Stufenanzeige.
+
+Der lange Tastendruck wurde in V4.8.3 nicht verändert.
