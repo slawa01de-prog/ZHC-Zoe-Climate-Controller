@@ -293,3 +293,55 @@ Die Seite zeigt zusätzlich:
 - IP-Adresse
 
 > Die Service-Ausgangstests sind ausschließlich für 3,3-V-/Niedervolt-Bench-Prüfungen vorgesehen.
+
+
+## PWM-Status-LED und OEM-Sofortabschaltung (V4.8.2)
+
+### RGB-LED
+
+Die RGB-LED wird ab V4.8.2 per PWM angesteuert.
+
+Belegung:
+- Rot: GPIO4
+- Grün: GPIO5
+- Blau: GPIO6
+
+Aktuelle Statusdarstellung:
+- **OEM:** langsam blau atmend
+- **AUTO:** grün
+- **BOOST:** gelb/orange pulsierend
+- **MANUAL:** cyan
+- **Service-Ausgangstest:** violett pulsierend
+- **Warnung:** gelb blinkend
+- **Fehler / Safety-Lock:** rot blinkend
+- **OTA-Update:** schnell blau pulsierend
+
+Die maximale LED-Helligkeit ist softwareseitig begrenzt, damit die Anzeige im Fahrzeug nicht unnötig hell ist.
+
+### Sofortige Abschaltung bei OEM
+
+Beim Wechsel von AUTO, BOOST oder MANUAL auf **OEM** werden die eigenen Ausgänge jetzt ohne Stufenabbau sofort abgeschaltet:
+
+- H1 = AUS
+- H2 = AUS
+- H3 = AUS
+- angeforderte Stufe = 0
+- aktive Stufe = 0
+- manuelle Stufe = 0
+- Reglerausgang = 0 %
+- Integrator = 0
+- Lern-/Reglerzustand wird auf einen sicheren Ausgangszustand gesetzt
+
+Die Mindest-Stufenzeit und Stufenverzögerung werden bei einer OEM-Abschaltung nicht angewendet.
+
+### Zentraler Abschaltpfad
+
+Der gleiche unmittelbare Abschaltpfad wird für folgende Situationen verwendet:
+- OEM
+- Fehler / FAILSAFE
+- OTA-Update
+- Service STOP / ALLE AUS
+
+Damit sollen H1/H2/H3 in allen Abschaltsituationen konsistent behandelt werden.
+
+> H1/H2/H3 sind weiterhin ausschließlich 3,3-V-Logik-/Niedervolt-Bench-Ausgänge.
