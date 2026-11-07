@@ -1,5 +1,24 @@
 # Changelog
 
+## V4.8.3 – Alpha / LED-Stufenanzeige
+
+- Grundfarbe zeigt weiterhin den Betriebsmodus.
+- Aktive Heizstufe wird durch helle Zusatzimpulse angezeigt.
+- Stufe 0: keine Zusatzimpulse.
+- Stufe 1: 1 heller Impuls.
+- Stufe 2: 2 helle Impulse.
+- Stufe 3: 3 helle Impulse.
+- Impulsmuster wiederholt sich ungefähr alle 4 Sekunden.
+- OEM bleibt blau atmend und zeigt keine Heizimpulse.
+- AUTO nutzt grüne Grundfarbe.
+- BOOST nutzt orange Grundfarbe.
+- MANUAL nutzt cyanfarbene Grundfarbe.
+- Fehler, Warnung, OTA und Service behalten Vorrang.
+- Langer Tastendruck bleibt unverändert.
+- V4.8.2-Funktionen wie PWM-Status, OEM-Sofortabschaltung und zentraler Abschaltpfad bleiben erhalten.
+
+
+
 ## V4.8.2 – Alpha / PWM-Status & OEM-Sofortabschaltung
 
 - RGB-LED auf PWM-Statusanzeige erweitert.
