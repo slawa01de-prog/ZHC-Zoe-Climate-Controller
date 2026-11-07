@@ -231,10 +231,11 @@ Keine Passwörter, WLAN-Schlüssel oder sonstige Zugangsdaten veröffentlichen.
 Dieses Projekt wird ohne Zusicherungen oder Garantien bereitgestellt.
 Die Nutzung und Erprobung erfolgt ausschließlich auf eigene Verantwortung.
 
-## ZHC V4.8.2 – aktuelle Alpha-Version
+## ZHC V4.8.3 – aktuelle Alpha-Version
 
 V4.8 erweitert die Weboberfläche zusätzlich um eine Service-Diagnose für einzelne 3,3-V-/Bench-Ausgänge, RGB-LED, Taster und Sensorbus.
 
+- [Firmware V4.8.3](firmware/Zoe_Heater_Controller_V4_8_3.ino)
 - [Firmware V4.8.2](firmware/Zoe_Heater_Controller_V4_8_2.ino)
 - [Firmware V4.8](firmware/Zoe_Heater_Controller_V4_8.ino)
 - [Firmware V4.7](firmware/Zoe_Heater_Controller_V4_7.ino)
@@ -250,3 +251,14 @@ V4.6 bleibt als Rückfallversion im Repository erhalten.
 - Sofortiges Abschalten von H1/H2/H3 beim Wechsel auf OEM.
 - Einheitlicher harter Abschaltpfad für OEM, Fehler, OTA und Service-STOP.
 - Service-Diagnose mit 5/10/30/60-Sekunden-Tests bleibt enthalten.
+
+
+### Neu in V4.8.3
+
+Die RGB-LED zeigt zusätzlich zur Modusfarbe jetzt die aktive Heizstufe:
+- Stufe 0: keine Zusatzimpulse
+- Stufe 1: 1 heller Impuls
+- Stufe 2: 2 helle Impulse
+- Stufe 3: 3 helle Impulse
+
+Das Muster wiederholt sich zyklisch, ohne die Grundfarbe des Modus zu verlieren.
