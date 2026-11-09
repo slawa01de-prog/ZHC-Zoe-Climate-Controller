@@ -1,0 +1,652 @@
+  }
+  else if (cmd == "fault")
+  {
+    printFault();
+  }
+  else if (cmd == "fault history")
+  {
+    printFaultHistory();
+  }
+  else if (cmd == "fault last")
+  {
+    printLastStoredFault();
+  }
+  else if (cmd == "fault reset")
+  {
+    resetFault();
+  }
+
+  // -----------------------------------------------------------
+  // Sensoren
+  // -----------------------------------------------------------
+
+  else if (cmd == "sensor scan")
+  {
+    printSensorScan();
+  }
+  else if (cmd == "sensor setup")
+  {
+    printSensorSetup();
+  }
+  else if (cmd == "sensor status")
+  {
+    printSensorStatus();
+  }
+  else if (cmd == "sensor save")
+  {
+    saveSettings();
+  }
+
+  // Assign
+  else if (cmd == "assign low none")
+  {
+    unassignSensor(ROLE_LOW);
+  }
+  else if (cmd == "assign high none")
+  {
+    unassignSensor(ROLE_HIGH);
+  }
+  else if (cmd == "assign outside none")
+  {
+    unassignSensor(ROLE_OUTSIDE);
+  }
+  else if (cmd == "assign safety none")
+  {
+    unassignSensor(ROLE_SAFETY);
+  }
+  else if (cmd.startsWith("assign low "))
+  {
+    int index = cmd.substring(11).toInt();
+    assignSensor(ROLE_LOW, index);
+  }
+  else if (cmd.startsWith("assign high "))
+  {
+    int index = cmd.substring(12).toInt();
+    assignSensor(ROLE_HIGH, index);
+  }
+  else if (cmd.startsWith("assign outside "))
+  {
+    int index = cmd.substring(15).toInt();
+    assignSensor(ROLE_OUTSIDE, index);
+  }
+  else if (cmd.startsWith("assign safety "))
+  {
+    int index = cmd.substring(14).toInt();
+    assignSensor(ROLE_SAFETY, index);
+  }
+
+  // Offsets
+  else if (cmd.startsWith("offset low "))
+  {
+    sensorLow.offset = cmd.substring(11).toFloat();
+    Serial.print("LOW Offset = ");
+    Serial.println(sensorLow.offset);
+  }
+  else if (cmd.startsWith("offset high "))
+  {
+    sensorHigh.offset = cmd.substring(12).toFloat();
+    Serial.print("HIGH Offset = ");
+    Serial.println(sensorHigh.offset);
+  }
+  else if (cmd.startsWith("offset outside "))
+  {
+    sensorOutside.offset = cmd.substring(15).toFloat();
+    Serial.print("OUTSIDE Offset = ");
+    Serial.println(sensorOutside.offset);
+  }
+  else if (cmd.startsWith("offset safety "))
+  {
+    sensorSafety.offset = cmd.substring(14).toFloat();
+    Serial.print("SAFETY Offset = ");
+    Serial.println(sensorSafety.offset);
+  }
+
+  // Gewichtung
+  else if (cmd.startsWith("weight low "))
+  {
+    float v = cmd.substring(11).toFloat();
+
+    if (v >= 0.0f && v <= 100.0f)
+    {
+      cfg.weightLow = v;
+      Serial.print("Weight LOW = ");
+      Serial.println(v);
+    }
+  }
+  else if (cmd.startsWith("weight high "))
+  {
+    float v = cmd.substring(12).toFloat();
+
+    if (v >= 0.0f && v <= 100.0f)
+    {
+      cfg.weightHigh = v;
+      Serial.print("Weight HIGH = ");
+      Serial.println(v);
+    }
+  }
+
+  // Safety
+  else if (cmd.startsWith("safetydiff "))
+  {
+    float v = cmd.substring(11).toFloat();
+
+    if (v >= 0.5f && v <= 15.0f)
+    {
+      cfg.safetyMaxDifference = v;
+      Serial.print("Safety Differenz = ");
+      Serial.print(v);
+      Serial.println(" K");
+    }
+  }
+  else if (cmd.startsWith("safetydelay "))
+  {
+    int v = cmd.substring(12).toInt();
+
+    if (v >= 5 && v <= 600)
+    {
+      cfg.safetyDifferenceDelaySec = v;
+      Serial.print("Safety Delay = ");
+      Serial.print(v);
+      Serial.println(" s");
+    }
+  }
+
+  // -----------------------------------------------------------
+  // Modus
+  // -----------------------------------------------------------
+
+  else if (cmd == "mode oem")
+  {
+    setMode(MODE_OEM);
+  }
+  else if (cmd == "mode auto")
+  {
+    setMode(MODE_AUTO);
+  }
+  else if (cmd == "mode boost")
+  {
+    setMode(MODE_BOOST);
+  }
+  else if (cmd == "mode manual")
+  {
+    setMode(MODE_MANUAL);
+  }
+
+  // -----------------------------------------------------------
+  // Manual Stage
+  // -----------------------------------------------------------
+
+  else if (cmd.startsWith("stage "))
+  {
+    int v = cmd.substring(6).toInt();
+
+    if (v >= 0 && v <= 3)
+    {
+      manualStage = v;
+      Serial.print("Manual Stage = ");
+      Serial.println(v);
+    }
+    else
+    {
+      Serial.println("Bereich: 0...3");
+    }
+  }
+
+  // -----------------------------------------------------------
+  // Temperatur
+  // -----------------------------------------------------------
+
+  else if (cmd.startsWith("target "))
+  {
+    float v = cmd.substring(7).toFloat();
+
+    if (v >= 15.0f && v <= 28.0f)
+    {
+      cfg.targetTemp = v;
+      integralTerm = 0.0f;
+      targetHoldActive = false;
+
+      Serial.print("Solltemperatur = ");
+      Serial.println(v);
+    }
+  }
+  else if (cmd.startsWith("deadband "))
+  {
+    float v = cmd.substring(9).toFloat();
+
+    if (v >= 0.10f && v <= 2.0f)
+    {
+      cfg.deadBand = v;
+      Serial.print("Deadband = ");
+      Serial.println(v);
+    }
+  }
+  else if (cmd.startsWith("restart "))
+  {
+    float v = cmd.substring(8).toFloat();
+
+    if (v >= 0.20f && v <= 5.0f)
+    {
+      cfg.restartDelta = v;
+      Serial.print("Restart Delta = ");
+      Serial.println(v);
+    }
+  }
+
+  // -----------------------------------------------------------
+  // PI
+  // -----------------------------------------------------------
+
+  else if (cmd.startsWith("kp "))
+  {
+    float v = cmd.substring(3).toFloat();
+
+    if (v >= 0.0f && v <= 100.0f)
+      cfg.kp = v;
+  }
+  else if (cmd.startsWith("ki "))
+  {
+    float v = cmd.substring(3).toFloat();
+
+    if (v >= 0.0f && v <= 10.0f)
+      cfg.ki = v;
+  }
+  else if (cmd.startsWith("trendgain "))
+  {
+    float v = cmd.substring(10).toFloat();
+
+    if (v >= 0.0f && v <= 100.0f)
+      cfg.trendGain = v;
+  }
+
+  // -----------------------------------------------------------
+  // Stufen
+  // -----------------------------------------------------------
+
+  else if (cmd.startsWith("threshold1 "))
+  {
+    cfg.stage1Threshold = cmd.substring(11).toFloat();
+  }
+  else if (cmd.startsWith("threshold2 "))
+  {
+    cfg.stage2Threshold = cmd.substring(11).toFloat();
+  }
+  else if (cmd.startsWith("threshold3 "))
+  {
+    cfg.stage3Threshold = cmd.substring(11).toFloat();
+  }
+  else if (cmd.startsWith("mintime "))
+  {
+    int v = cmd.substring(8).toInt();
+
+    if (v >= 10 && v <= 1800)
+      cfg.minStageTimeSec = v;
+  }
+  else if (cmd.startsWith("stagedelay "))
+  {
+    int v = cmd.substring(11).toInt();
+
+    if (v >= 5 && v <= 600)
+      cfg.stageDelaySec = v;
+  }
+  else if (cmd.startsWith("boosttime "))
+  {
+    int v = cmd.substring(10).toInt();
+
+    if (v >= 10 && v <= 3600)
+      cfg.boostTimeSec = v;
+  }
+
+  // -----------------------------------------------------------
+  // Learning
+  // -----------------------------------------------------------
+
+  else if (cmd == "learning on")
+  {
+    cfg.learningEnabled = true;
+    Serial.println("Learning ON");
+  }
+  else if (cmd == "learning off")
+  {
+    cfg.learningEnabled = false;
+    stopLearningMeasurement();
+    Serial.println("Learning OFF");
+  }
+  else if (cmd == "learning reset")
+  {
+    model = ThermalModel();
+    stopLearningMeasurement();
+    Serial.println("Thermisches Lernmodell zurueckgesetzt.");
+  }
+  else if (cmd.startsWith("learnrate "))
+  {
+    float v = cmd.substring(10).toFloat();
+
+    if (v >= 0.001f && v <= 0.5f)
+      cfg.learningRate = v;
+  }
+  else if (cmd.startsWith("learntime "))
+  {
+    int v = cmd.substring(10).toInt();
+
+    if (v >= 30 && v <= 3600)
+      cfg.learningMinTimeSec = v;
+  }
+
+  // -----------------------------------------------------------
+  // Sicherheit
+  // -----------------------------------------------------------
+
+  else if (cmd.startsWith("emergency "))
+  {
+    float v = cmd.substring(10).toFloat();
+
+    if (v >= 25.0f && v <= 50.0f)
+      cfg.emergencyMaxTemp = v;
+  }
+  else if (cmd.startsWith("sensortimeout "))
+  {
+    int v = cmd.substring(14).toInt();
+
+    if (v >= 2 && v <= 120)
+      cfg.sensorTimeoutSec = v;
+  }
+  else if (cmd.startsWith("tempjump "))
+  {
+    float v = cmd.substring(9).toFloat();
+
+    if (v >= 0.5f && v <= 20.0f)
+      cfg.maxTempJump = v;
+  }
+
+  // -----------------------------------------------------------
+  // Service-Diagnose / 3.3-V-Bench
+  // -----------------------------------------------------------
+
+  else if (cmd == "service status")
+  {
+    printServiceStatus();
+  }
+  else if (cmd == "service off" || cmd == "service stop")
+  {
+    stopServiceOutputTest();
+    Serial.println("Service-Ausgaenge H1/H2/H3 AUS.");
+  }
+  else if (cmd == "service button")
+  {
+    Serial.print("GPIO3 Taster: ");
+    Serial.println(digitalRead(PIN_BUTTON) == LOW ? "GEDRUECKT / LOW" : "FREI / HIGH");
+  }
+  else if (cmd == "service sensors")
+  {
+    printSensorScan();
+  }
+  else if (cmd == "service rgb red")
+  {
+    startServiceRgbTest(1);
+    Serial.println("RGB Rot fuer 3 s.");
+  }
+  else if (cmd == "service rgb green")
+  {
+    startServiceRgbTest(2);
+    Serial.println("RGB Gruen fuer 3 s.");
+  }
+  else if (cmd == "service rgb blue")
+  {
+    startServiceRgbTest(3);
+    Serial.println("RGB Blau fuer 3 s.");
+  }
+  else if (cmd == "service rgb off")
+  {
+    serviceRgbTestActive = false;
+    serviceRgbTestColor = 0;
+    rgbOff();
+    Serial.println("RGB AUS.");
+  }
+  else if (cmd.startsWith("service h1 "))
+  {
+    terminalServiceOutput(0x01, (uint32_t)cmd.substring(11).toInt());
+  }
+  else if (cmd.startsWith("service h2 "))
+  {
+    terminalServiceOutput(0x02, (uint32_t)cmd.substring(11).toInt());
+  }
+  else if (cmd.startsWith("service h3 "))
+  {
+    terminalServiceOutput(0x04, (uint32_t)cmd.substring(11).toInt());
+  }
+
+  // -----------------------------------------------------------
+  // WLAN / WEB
+  // -----------------------------------------------------------
+
+  else if (cmd == "wifi on")
+  {
+    startZHCWiFi();
+  }
+  else if (cmd == "wifi off")
+  {
+    stopZHCWiFi();
+  }
+  else if (cmd == "wifi status")
+  {
+    printWiFiStatus();
+  }
+  else if (cmd == "wifi startup on")
+  {
+    wifiStartupEnabled = true;
+    saveWiFiSettings();
+    Serial.println("WLAN Startup = EIN");
+  }
+  else if (cmd == "wifi startup off")
+  {
+    wifiStartupEnabled = false;
+    saveWiFiSettings();
+    Serial.println("WLAN Startup = AUS");
+  }
+  else if (cmd == "security status")
+  {
+    Serial.println();
+    Serial.println("============== SECURITY STATUS ================");
+    Serial.println("Benutzer: admin");
+    Serial.print("Erstlogin erforderlich: ");
+    Serial.println(forcePasswordChange ? "JA" : "NEIN");
+    Serial.print("Session aktiv: ");
+    Serial.println(sessionToken.length() > 0 ? "JA" : "NEIN");
+
+    if (forcePasswordChange && temporaryPassword.length() > 0)
+    {
+      Serial.print("Initialpasswort: ");
+      Serial.println(temporaryPassword);
+    }
+
+    Serial.println("================================================");
+  }
+  else if (cmd == "security reset")
+  {
+    resetWebCredentials();
+  }
+
+  // -----------------------------------------------------------
+  // System
+  // -----------------------------------------------------------
+
+  else if (cmd == "save")
+  {
+    if (configValid())
+      saveSettings();
+    else
+      Serial.println("Konfiguration ungueltig - nicht gespeichert.");
+  }
+  else if (cmd == "defaults")
+  {
+    loadDefaults();
+  }
+  else if (cmd == "reboot")
+  {
+    forceOutputsOff();
+    Serial.println("Neustart...");
+    delay(300);
+    ESP.restart();
+  }
+  else if (cmd.length() > 0)
+  {
+    Serial.print("Unbekannter Befehl: ");
+    Serial.println(cmd);
+    Serial.println("menu eingeben.");
+  }
+}
+
+void processSerial()
+{
+  while (Serial.available())
+  {
+    char c = Serial.read();
+
+    if (c == '\r' || c == '\n')
+    {
+      if (terminalBuffer.length() > 0)
+      {
+        processMenuInput(terminalBuffer);
+        terminalBuffer = "";
+      }
+    }
+    else
+    {
+      terminalBuffer += c;
+
+      if (terminalBuffer.length() > 160)
+        terminalBuffer = "";
+    }
+  }
+}
+
+// =====================================================================
+// SETUP
+// =====================================================================
+
+void setup()
+{
+  // ESP32-C3 USB Serial
+  // Kein Warten auf ein geoeffnetes Terminal:
+  // Der Controller muss auch ohne USB-Verbindung sofort starten.
+  Serial.begin(115200);
+
+  delay(100);
+
+  // Ausgaenge zuerst sicher AUS
+  pinMode(HEATER1_OUT, OUTPUT);
+  pinMode(HEATER2_OUT, OUTPUT);
+  pinMode(HEATER3_OUT, OUTPUT);
+  forceOutputsOff();
+
+  // Button
+  pinMode(PIN_BUTTON, INPUT_PULLUP);
+
+  // Security/WLAN-Konfiguration laden.
+  loadSecuritySettings();
+  loadWiFiSettings();
+
+  // Lokaler Recovery: Taster beim Boot ca. 8 Sekunden halten.
+  checkBootCredentialRecovery();
+
+  // RGB
+  pinMode(PIN_RGB_R, OUTPUT);
+  pinMode(PIN_RGB_G, OUTPUT);
+  pinMode(PIN_RGB_B, OUTPUT);
+  rgbOff();
+
+  // Einstellungen
+  loadSettings();
+
+  // DS18B20
+  sensors.begin();
+  sensors.setResolution(11);
+
+  scanSensors();
+
+  // Safe Boot
+  currentMode = MODE_OEM;
+  requestedStage = 0;
+  activeStage = 0;
+  integralTerm = 0.0f;
+
+  faultLatched = false;
+  activeFault = FAULT_NONE;
+
+  lastControlCycleMillis = millis();
+
+  Serial.println();
+  Serial.println("================================================");
+  Serial.println(FW_VERSION);
+  Serial.println("ESP32-C3 SUPER MINI");
+  Serial.println("SAFE CONTROL / BENCH VERSION");
+  Serial.println("================================================");
+  Serial.println();
+  Serial.println("BOOT-SICHERHEIT:");
+  Serial.println("Alle Heiz-Ausgaenge = AUS");
+  Serial.println("Startmodus = OEM");
+  Serial.println("Automatische Heizfreigabe = NEIN");
+  Serial.println("Terminal/Setup bleibt auch bei Fehlern bedienbar.");
+  Serial.println("Ohne Sensorzuordnung: sicherer SETUP/OEM-Zustand, kein FAILSAFE.");
+  Serial.println();
+
+  Serial.print("DS18B20 gefunden: ");
+  Serial.println(discoveredSensorCount);
+
+  if (forcePasswordChange)
+  {
+    Serial.println();
+    Serial.println("WEB ERSTEINRICHTUNG:");
+    Serial.println(" Benutzer       : admin");
+    Serial.print(" Initialpasswort: ");
+    Serial.println(temporaryPassword);
+    Serial.println(" Passwort muss nach erstem Login geaendert werden.");
+  }
+
+  if (wifiStartupEnabled)
+  {
+    startZHCWiFi();
+  }
+
+  if (!anyCabinRoleAssigned())
+  {
+    Serial.println();
+    Serial.println("Hinweis: Noch kein Innenraumsensor zugewiesen.");
+    Serial.println("Menue 2 -> Sensoren fuer die Einrichtung verwenden.");
+  }
+
+  printMainMenu();
+}
+
+// =====================================================================
+// LOOP
+// =====================================================================
+
+void loop()
+{
+  static uint32_t lastControlMillis = 0;
+
+  processSerial();
+  serviceWebServer();
+  serviceBenchTests();
+
+  if (otaInProgress)
+  {
+    requestedStage = 0;
+    activeStage = 0;
+    controllerOutput = 0.0f;
+    forceOutputsOff();
+    updateRGB();
+    delay(2);
+    return;
+  }
+
+  processButton();
+  readSensors();
+
+  safetySupervisor();
+  checkControlCycleTimeout();
+
+  if (millis() - lastControlMillis >= CONTROL_INTERVAL_MS)
+  {
