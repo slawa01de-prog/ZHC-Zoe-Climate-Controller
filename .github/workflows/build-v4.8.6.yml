@@ -28,7 +28,11 @@ jobs:
       - name: Reconstruct complete V4.8.6 sketch
         run: |
           mkdir -p build_sketch/Zoe_Heater_Controller_V4_8_6
-          cat firmware/v4_8_6_parts/part*.txt > build_sketch/Zoe_Heater_Controller_V4_8_6/Zoe_Heater_Controller_V4_8_6.ino
+          : > build_sketch/Zoe_Heater_Controller_V4_8_6/Zoe_Heater_Controller_V4_8_6.ino
+          for f in firmware/v4_8_6_parts/part*.txt; do
+            cat "$f" >> build_sketch/Zoe_Heater_Controller_V4_8_6/Zoe_Heater_Controller_V4_8_6.ino
+            printf '\n' >> build_sketch/Zoe_Heater_Controller_V4_8_6/Zoe_Heater_Controller_V4_8_6.ino
+          done
           wc -c build_sketch/Zoe_Heater_Controller_V4_8_6/Zoe_Heater_Controller_V4_8_6.ino
           grep -q 'FW_VERSION = "ZOE Heater Controller V4.8.6"' build_sketch/Zoe_Heater_Controller_V4_8_6/Zoe_Heater_Controller_V4_8_6.ino
           grep -q 'void setup()' build_sketch/Zoe_Heater_Controller_V4_8_6/Zoe_Heater_Controller_V4_8_6.ino
