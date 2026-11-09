@@ -1,0 +1,800 @@
+      return;
+    }
+  }
+
+  if (otaInProgress)
+  {
+    uint8_t v = triangleWave255(700);
+    setRGB(0, 0, v);
+    return;
+  }
+
+  if (faultLatched || currentMode == MODE_FAILSAFE)
+  {
+    if (blinkPhase(250)) setRGB(255, 0, 0);
+    else rgbOff();
+    return;
+  }
+
+  if (activeWarning != WARNING_NONE)
+  {
+    if (blinkPhase(500)) setRGB(255, 120, 0);
+    else rgbOff();
+    return;
+  }
+
+  if (serviceOutputTestActive)
+  {
+    uint8_t v = triangleWave255(900);
+    setRGB(v, 0, v);
+    return;
+  }
+
+  switch (currentMode)
+  {
+    case MODE_OEM:
+    {
+      // OEM hat keine aktive Heizstufe. Ruhiges blaues Atmen.
+      uint8_t v = triangleWave255(3500);
+      setRGB(0, 0, v);
+      break;
+    }
+
+    case MODE_AUTO:
+      applyStagePulseToBase(0, 120, 0, activeStage);
+      break;
+
+    case MODE_BOOST:
+      applyStagePulseToBase(150, 70, 0, activeStage);
+      break;
+
+    case MODE_MANUAL:
+      applyStagePulseToBase(0, 90, 130, activeStage);
+      break;
+
+    case MODE_FAILSAFE:
+    default:
+      rgbRed();
+      break;
+  }
+}
+
+// =====================================================================
+// DIAGNOSTICS
+// =====================================================================
+
+void printStatus()
+{
+  Serial.println();
+  Serial.println("============== ZOE HEATER STATUS ==============");
+
+  Serial.print("Firmware           : ");
+  Serial.println(FW_VERSION);
+
+  Serial.print("Mode               : ");
+  Serial.println(modeName());
+
+  Serial.print("Safety-Lock        : ");
+  Serial.println(faultLatched ? "AKTIV" : "NEIN");
+
+  Serial.print("Neue Diagnose      : ");
+  Serial.println(faultUnread ? "JA" : "NEIN");
+
+  Serial.println();
+
+  Serial.print("LOW                : ");
+  if (sensorLow.valid)
+  {
+    Serial.print(sensorLow.temperature, 2);
+    Serial.println(" C");
+  }
+  else Serial.println("---");
+
+  Serial.print("HIGH               : ");
+  if (sensorHigh.valid)
+  {
+    Serial.print(sensorHigh.temperature, 2);
+    Serial.println(" C");
+  }
+  else Serial.println("---");
+
+  Serial.print("OUTSIDE            : ");
+  if (sensorOutside.valid)
+  {
+    Serial.print(sensorOutside.temperature, 2);
+    Serial.println(" C");
+  }
+  else Serial.println("---");
+
+  Serial.print("SAFETY             : ");
+  if (sensorSafety.valid)
+  {
+    Serial.print(sensorSafety.temperature, 2);
+    Serial.println(" C");
+  }
+  else Serial.println("---");
+
+  Serial.println();
+
+  Serial.print("Virtual Cabin      : ");
+  if (isfinite(controlTemp))
+  {
+    Serial.print(controlTemp, 2);
+    Serial.println(" C");
+  }
+  else Serial.println("---");
+
+  Serial.print("Target             : ");
+  Serial.print(cfg.targetTemp, 2);
+  Serial.println(" C");
+
+  Serial.print("Stratification     : ");
+  if (isfinite(stratification))
+  {
+    Serial.print(stratification, 2);
+    Serial.println(" K");
+  }
+  else Serial.println("---");
+
+  Serial.print("Trend              : ");
+  Serial.print(tempTrendPerMinute, 3);
+  Serial.println(" K/min");
+
+  Serial.println();
+
+  Serial.print("P-Anteil           : ");
+  Serial.println(proportionalTerm, 2);
+
+  Serial.print("I-Anteil           : ");
+  Serial.println(integralTerm, 2);
+
+  Serial.print("Trendkorrektur     : ");
+  Serial.println(trendCorrection, 2);
+
+  Serial.print("Schichtungskorr.   : ");
+  Serial.println(stratificationCorrection, 2);
+
+  Serial.print("Reglerausgang      : ");
+  Serial.print(controllerOutput, 1);
+  Serial.println(" %");
+
+  Serial.print("Requested Stage    : ");
+  Serial.println(requestedStage);
+
+  Serial.print("Active Stage       : ");
+  Serial.println(activeStage);
+
+  Serial.println();
+
+  Serial.print("Warnung            : ");
+  Serial.println(warningName(activeWarning));
+
+  Serial.print("Fehler             : ");
+  Serial.println(faultName(activeFault));
+
+  Serial.println("================================================");
+}
+
+void printDiagnostics()
+{
+  Serial.println();
+  Serial.println("============== SYSTEM DIAGNOSTICS =============");
+
+  Serial.print("Konfiguration      : ");
+  Serial.println(configValid() ? "OK" : "FEHLER");
+
+  Serial.print("CABIN_LOW          : ");
+  if (!sensorLow.assigned) Serial.println("DEAKTIVIERT");
+  else if (!sensorLow.present) Serial.println("NICHT GEFUNDEN");
+  else Serial.println(sensorLow.valid ? "OK" : "FEHLER");
+
+  Serial.print("CABIN_HIGH         : ");
+  if (!sensorHigh.assigned) Serial.println("DEAKTIVIERT");
+  else if (!sensorHigh.present) Serial.println("NICHT GEFUNDEN");
+  else Serial.println(sensorHigh.valid ? "OK" : "FEHLER");
+
+  Serial.print("OUTSIDE            : ");
+  if (!sensorOutside.assigned) Serial.println("DEAKTIVIERT");
+  else if (!sensorOutside.present) Serial.println("NICHT GEFUNDEN / OPTIONAL");
+  else Serial.println(sensorOutside.valid ? "OK" : "FEHLER");
+
+  Serial.print("SAFETY             : ");
+  if (!sensorSafety.assigned) Serial.println("DEAKTIVIERT");
+  else if (!sensorSafety.present) Serial.println("NICHT GEFUNDEN");
+  else Serial.println(sensorSafety.valid ? "OK" : "FEHLER");
+
+  Serial.println();
+
+  Serial.print("Virtual Cabin      : ");
+  if (isfinite(controlTemp))
+  {
+    Serial.print(controlTemp, 2);
+    Serial.println(" C");
+  }
+  else Serial.println("INVALID");
+
+  Serial.print("Regler             : ");
+  Serial.println(isfinite(controllerOutput) ? "OK" : "FEHLER");
+
+  Serial.print("H1 Logikausgang    : ");
+  Serial.println(digitalRead(HEATER1_OUT) ? "ON" : "OFF");
+
+  Serial.print("H2 Logikausgang    : ");
+  Serial.println(digitalRead(HEATER2_OUT) ? "ON" : "OFF");
+
+  Serial.print("H3 Logikausgang    : ");
+  Serial.println(digitalRead(HEATER3_OUT) ? "ON" : "OFF");
+
+  Serial.println();
+
+  Serial.print("Warnung            : ");
+  Serial.println(warningName(activeWarning));
+
+  Serial.print("Aktueller Fehler   : ");
+  Serial.println(faultName(activeFault));
+
+  Serial.print("Failsafe           : ");
+  Serial.println(faultLatched ? "AKTIV" : "NEIN");
+
+  Serial.print("GESAMTSTATUS       : ");
+
+  if (faultLatched || !configValid())
+    Serial.println("FEHLER");
+  else if (activeWarning != WARNING_NONE)
+    Serial.println("WARNUNG");
+  else
+    Serial.println("OK");
+
+  Serial.println("================================================");
+}
+
+void printThermal()
+{
+  Serial.println();
+  Serial.println("============== THERMAL MODEL ==================");
+
+  Serial.print("Stage 1 Gain       : ");
+  Serial.print(model.gainStage1, 4);
+  Serial.print(" K/min  Samples=");
+  Serial.println(model.samplesStage1);
+
+  Serial.print("Stage 2 Gain       : ");
+  Serial.print(model.gainStage2, 4);
+  Serial.print(" K/min  Samples=");
+  Serial.println(model.samplesStage2);
+
+  Serial.print("Stage 3 Gain       : ");
+  Serial.print(model.gainStage3, 4);
+  Serial.print(" K/min  Samples=");
+  Serial.println(model.samplesStage3);
+
+  Serial.print("Nachlauf           : ");
+  Serial.print(model.coastTemp, 3);
+  Serial.println(" K");
+
+  Serial.print("Learning           : ");
+  Serial.println(cfg.learningEnabled ? "ON" : "OFF");
+
+  Serial.print("Aussentemp aktuell : ");
+  if (sensorOutside.valid)
+  {
+    Serial.print(sensorOutside.temperature, 2);
+    Serial.println(" C");
+  }
+  else Serial.println("---");
+
+  Serial.println("================================================");
+}
+
+void printFault()
+{
+  Serial.println();
+  Serial.println("============== FEHLERANALYSE ==================");
+
+  Serial.print("Systemstatus       : ");
+  Serial.println(faultLatched ? "SAFETY-LOCK" : "OK / SETUP");
+
+  Serial.print("Fehler             : ");
+  Serial.println(faultName(activeFault));
+
+  Serial.print("Neue Meldung       : ");
+  Serial.println(faultUnread ? "JA" : "NEIN");
+
+  Serial.print("Heizfreigabe       : ");
+  Serial.println(faultLatched ? "GESPERRT" : "FREI");
+
+  Serial.println();
+  Serial.println("Das Terminal/Setup bleibt immer bedienbar.");
+  Serial.println("Nur AUTO/BOOST/MANUAL wird bei Safety-Lock gesperrt.");
+  Serial.println();
+
+  printSensorStatus();
+
+  // Einmaliges Auslesen / Quittieren der Diagnoseanzeige.
+  // Der Safety-Lock selbst wird dadurch NICHT geloescht.
+  faultUnread = false;
+
+  Serial.println("Diagnose als gelesen markiert.");
+  Serial.println("Zum Entsperren nach Fehlerbehebung: fault reset");
+  Serial.println("================================================");
+}
+
+void printAnalysis()
+{
+  Serial.println();
+  Serial.println("################################################");
+  Serial.println("                    ANALYSE");
+  Serial.println("################################################");
+
+  printFault();
+  printDiagnostics();
+
+  Serial.println();
+  Serial.println("Weitere Befehle:");
+  Serial.println(" analyse history");
+  Serial.println(" analyse last");
+  Serial.println(" sensor setup");
+  Serial.println(" fault reset");
+  Serial.println("################################################");
+}
+
+void printFaultHistory()
+{
+  Serial.println();
+  Serial.println("============== FEHLERHISTORIE =================");
+
+  if (faultHistoryCount == 0)
+  {
+    Serial.println("Keine Fehler gespeichert.");
+    Serial.println("================================================");
+    return;
+  }
+
+  for (uint8_t n = 0; n < faultHistoryCount; n++)
+  {
+    int index =
+      faultHistoryIndex - 1 - n;
+
+    while (index < 0)
+      index += FAULT_HISTORY_SIZE;
+
+    FaultRecord &f =
+      faultHistory[index];
+
+    Serial.print("#");
+    Serial.print(n + 1);
+
+    Serial.print(" ");
+    Serial.print(faultName(f.code));
+
+    Serial.print(" | t=");
+    Serial.print(f.timestamp / 1000UL);
+    Serial.print("s");
+
+    Serial.print(" | LOW=");
+    Serial.print(f.lowTemp);
+
+    Serial.print(" | HIGH=");
+    Serial.print(f.highTemp);
+
+    Serial.print(" | CTRL=");
+    Serial.print(f.controlTemp);
+
+    Serial.print(" | OUT=");
+    Serial.print(f.outsideTemp);
+
+    Serial.print(" | SAFE=");
+    Serial.print(f.safetyTemp);
+
+    Serial.print(" | STAGE=");
+    Serial.println(f.stage);
+  }
+
+  Serial.println("================================================");
+}
+
+void printLastStoredFault()
+{
+  preferences.begin("zoefault", true);
+
+  uint32_t code =
+    preferences.getUInt("code", 0);
+
+  if (code == 0)
+  {
+    preferences.end();
+    Serial.println("Kein persistenter Fehler gespeichert.");
+    return;
+  }
+
+  float low =
+    preferences.getFloat("low", NAN);
+
+  float high =
+    preferences.getFloat("high", NAN);
+
+  float out =
+    preferences.getFloat("out", NAN);
+
+  float safe =
+    preferences.getFloat("safe", NAN);
+
+  float ctrl =
+    preferences.getFloat("ctrl", NAN);
+
+  uint32_t stage =
+    preferences.getUInt("stage", 0);
+
+  uint32_t uptime =
+    preferences.getUInt("uptime", 0);
+
+  preferences.end();
+
+  Serial.println();
+  Serial.println("========= LETZTER GESPEICHERTER FEHLER =========");
+
+  Serial.print("Fehler             : ");
+  Serial.println(faultName((FaultCode)code));
+
+  Serial.print("LOW                : ");
+  Serial.println(low);
+
+  Serial.print("HIGH               : ");
+  Serial.println(high);
+
+  Serial.print("CONTROL            : ");
+  Serial.println(ctrl);
+
+  Serial.print("OUTSIDE            : ");
+  Serial.println(out);
+
+  Serial.print("SAFETY             : ");
+  Serial.println(safe);
+
+  Serial.print("Stage              : ");
+  Serial.println(stage);
+
+  Serial.print("Uptime damals      : ");
+  Serial.print(uptime);
+  Serial.println(" s");
+
+  Serial.println("================================================");
+}
+
+// =====================================================================
+// FAULT RESET
+// =====================================================================
+
+bool currentSafetyConditionsOkay()
+{
+  scanSensors();
+
+  if (!configValid())
+    return false;
+
+  if (!anyCabinRoleAssigned())
+    return false;
+
+  // Mindestens einer muss aktuell vorhanden sein.
+  bool lowPresent =
+    sensorLow.assigned && sensorLow.present;
+
+  bool highPresent =
+    sensorHigh.assigned && sensorHigh.present;
+
+  if (!lowPresent && !highPresent)
+    return false;
+
+  // Wenn SAFETY zugewiesen ist, muss er vorhanden sein.
+  if (sensorSafety.assigned && !sensorSafety.present)
+    return false;
+
+  return true;
+}
+
+void resetFault()
+{
+  if (!faultLatched)
+  {
+    Serial.println("Kein verriegelter Fehler vorhanden.");
+    return;
+  }
+
+  if (!currentSafetyConditionsOkay())
+  {
+    Serial.println("FAULT RESET NICHT MOEGLICH.");
+    Serial.println("Fehlerursache / Sensorzuordnung noch ungueltig.");
+    return;
+  }
+
+  stopServiceOutputTest();
+  forceOutputsOff();
+
+  activeFault = FAULT_NONE;
+  faultLatched = false;
+  faultUnread = false;
+
+  requestedStage = 0;
+  activeStage = 0;
+
+  integralTerm = 0.0f;
+  targetHoldActive = false;
+
+  currentMode = MODE_OEM;
+
+  Serial.println("Fehler geloescht.");
+  Serial.println("System bleibt im OEM-Modus.");
+}
+
+// =====================================================================
+// MENU
+// =====================================================================
+
+void processCommand(String cmd);
+
+void printMainMenu()
+{
+  currentMenu = MENU_MAIN;
+
+  Serial.println();
+  Serial.println("================================================");
+  Serial.println("       ZOE CLIMATE CONTROLLER V4.6");
+  Serial.println("================================================");
+  Serial.println(" 1  Status");
+  Serial.println(" 2  Sensoren");
+  Serial.println(" 3  Betriebsart");
+  Serial.println(" 4  Temperatur / Komfort");
+  Serial.println(" 5  Regler");
+  Serial.println(" 6  Heizstufen");
+  Serial.println(" 7  Lernsystem");
+  Serial.println(" 8  Analyse / Fehler");
+  Serial.println(" 9  System");
+  Serial.println();
+  Serial.println(" 0  Schnellstatus");
+  Serial.println(" h  Expertenbefehle anzeigen");
+  Serial.println("================================================");
+  Serial.print("> ");
+}
+
+void printStatusMenu()
+{
+  currentMenu = MENU_STATUS;
+
+  Serial.println();
+  Serial.println("--------------- STATUS ----------------");
+  Serial.println(" 1  Gesamtstatus");
+  Serial.println(" 2  Sensordaten");
+  Serial.println(" 3  Thermisches Modell");
+  Serial.println(" 4  Systemdiagnose");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printSensorMenu()
+{
+  currentMenu = MENU_SENSORS;
+
+  Serial.println();
+  Serial.println("-------------- SENSOREN ---------------");
+  Serial.println(" 1  Sensorstatus");
+  Serial.println(" 2  Sensoren suchen");
+  Serial.println(" 3  Sensor-Zuordnung anzeigen");
+  Serial.println(" 4  CABIN_LOW zuweisen");
+  Serial.println(" 5  CABIN_HIGH zuweisen");
+  Serial.println(" 6  OUTSIDE zuweisen");
+  Serial.println(" 7  SAFETY zuweisen");
+  Serial.println(" 8  Sensor-Zuweisung loeschen");
+  Serial.println(" 9  Gewichtung LOW/HIGH");
+  Serial.println("10  Sensor-Offsets");
+  Serial.println("11  Sensor-Einstellungen speichern");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printModeMenu()
+{
+  currentMenu = MENU_MODE;
+
+  Serial.println();
+  Serial.println("------------- BETRIEBSART -------------");
+  Serial.print("Aktuell: ");
+  Serial.println(modeName());
+  Serial.println();
+  Serial.println(" 1  OEM");
+  Serial.println(" 2  AUTO");
+  Serial.println(" 3  BOOST");
+  Serial.println(" 4  MANUAL");
+  Serial.println(" 5  Manuelle Stufe 0");
+  Serial.println(" 6  Manuelle Stufe 1");
+  Serial.println(" 7  Manuelle Stufe 2");
+  Serial.println(" 8  Manuelle Stufe 3");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printTemperatureMenu()
+{
+  currentMenu = MENU_TEMPERATURE;
+
+  Serial.println();
+  Serial.println("--------- TEMPERATUR / KOMFORT --------");
+  Serial.print("Solltemperatur : ");
+  Serial.print(cfg.targetTemp, 2);
+  Serial.println(" C");
+  Serial.print("Deadband       : ");
+  Serial.print(cfg.deadBand, 2);
+  Serial.println(" K");
+  Serial.print("Restart Delta  : ");
+  Serial.print(cfg.restartDelta, 2);
+  Serial.println(" K");
+  Serial.print("Weight LOW     : ");
+  Serial.print(cfg.weightLow, 1);
+  Serial.println(" %");
+  Serial.print("Weight HIGH    : ");
+  Serial.print(cfg.weightHigh, 1);
+  Serial.println(" %");
+  Serial.println();
+  Serial.println(" 1  Solltemperatur aendern");
+  Serial.println(" 2  Deadband aendern");
+  Serial.println(" 3  Restart Delta aendern");
+  Serial.println(" 4  Weight LOW aendern");
+  Serial.println(" 5  Weight HIGH aendern");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printControllerMenu()
+{
+  currentMenu = MENU_CONTROLLER;
+
+  Serial.println();
+  Serial.println("--------------- REGLER ----------------");
+  Serial.print("Kp         : "); Serial.println(cfg.kp);
+  Serial.print("Ki         : "); Serial.println(cfg.ki);
+  Serial.print("Trend Gain : "); Serial.println(cfg.trendGain);
+  Serial.println();
+  Serial.println(" 1  Kp aendern");
+  Serial.println(" 2  Ki aendern");
+  Serial.println(" 3  Trend Gain aendern");
+  Serial.println(" 4  Reglerstatus anzeigen");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printStageMenu()
+{
+  currentMenu = MENU_STAGES;
+
+  Serial.println();
+  Serial.println("------------- HEIZSTUFEN --------------");
+  Serial.print("Threshold 1 : "); Serial.println(cfg.stage1Threshold);
+  Serial.print("Threshold 2 : "); Serial.println(cfg.stage2Threshold);
+  Serial.print("Threshold 3 : "); Serial.println(cfg.stage3Threshold);
+  Serial.print("Min. Zeit   : "); Serial.print(cfg.minStageTimeSec); Serial.println(" s");
+  Serial.print("Stage Delay : "); Serial.print(cfg.stageDelaySec); Serial.println(" s");
+  Serial.print("Boost Zeit  : "); Serial.print(cfg.boostTimeSec); Serial.println(" s");
+  Serial.println();
+  Serial.println(" 1  Threshold 1 aendern");
+  Serial.println(" 2  Threshold 2 aendern");
+  Serial.println(" 3  Threshold 3 aendern");
+  Serial.println(" 4  Mindestzeit aendern");
+  Serial.println(" 5  Stage Delay aendern");
+  Serial.println(" 6  Boost-Zeit aendern");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printLearningMenu()
+{
+  currentMenu = MENU_LEARNING;
+
+  Serial.println();
+  Serial.println("------------- LERNSYSTEM --------------");
+  Serial.print("Learning : ");
+  Serial.println(cfg.learningEnabled ? "EIN" : "AUS");
+  Serial.print("Rate     : ");
+  Serial.println(cfg.learningRate);
+  Serial.print("Messzeit : ");
+  Serial.print(cfg.learningMinTimeSec);
+  Serial.println(" s");
+  Serial.println();
+  Serial.println(" 1  Learning EIN");
+  Serial.println(" 2  Learning AUS");
+  Serial.println(" 3  Lernmodell anzeigen");
+  Serial.println(" 4  Lernmodell zuruecksetzen");
+  Serial.println(" 5  Learning Rate aendern");
+  Serial.println(" 6  Learning Messzeit aendern");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printAnalysisMenu()
+{
+  currentMenu = MENU_ANALYSIS;
+
+  Serial.println();
+  Serial.println("----------- ANALYSE / FEHLER -----------");
+  Serial.print("Safety-Lock : ");
+  Serial.println(faultLatched ? "AKTIV" : "NEIN");
+  Serial.print("Neue Meldung: ");
+  Serial.println(faultUnread ? "JA" : "NEIN");
+  Serial.println();
+  Serial.println(" 1  Aktuelle Fehleranalyse");
+  Serial.println(" 2  Systemdiagnose");
+  Serial.println(" 3  Fehlerhistorie");
+  Serial.println(" 4  Letzten gespeicherten Fehler");
+  Serial.println(" 5  Safety-Lock zuruecksetzen");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printSystemMenu()
+{
+  currentMenu = MENU_SYSTEM;
+
+  Serial.println();
+  Serial.println("--------------- SYSTEM ----------------");
+  Serial.println(" 1  WLAN / Web");
+  Serial.println(" 2  Sicherheit / Login");
+  Serial.println(" 3  Alles speichern");
+  Serial.println(" 4  Defaultwerte laden");
+  Serial.println(" 5  Neustart");
+  Serial.println(" 6  Firmware / Status");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printWiFiMenu()
+{
+  currentMenu = MENU_WIFI;
+
+  Serial.println();
+  Serial.println("------------- WLAN / WEB --------------");
+  Serial.print("WLAN    : ");
+  Serial.println(wifiEnabled ? "EIN" : "AUS");
+  Serial.print("Startup : ");
+  Serial.println(wifiStartupEnabled ? "EIN" : "AUS");
+  Serial.println("SSID    : ZHC");
+  Serial.println();
+  Serial.println(" 1  WLAN einschalten");
+  Serial.println(" 2  WLAN ausschalten");
+  Serial.println(" 3  WLAN-Status");
+  Serial.println(" 4  WLAN beim Start EIN");
+  Serial.println(" 5  WLAN beim Start AUS");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printSecurityMenu()
+{
+  currentMenu = MENU_SECURITY;
