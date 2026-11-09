@@ -1,0 +1,800 @@
+    return 0;
+
+  int32_t diff = (int32_t)(serviceOutputUntilMillis - millis());
+  return diff > 0 ? (uint32_t)diff : 0;
+}
+
+void serviceBenchTests()
+{
+  if (serviceOutputTestActive)
+  {
+    if (faultLatched || otaInProgress ||
+        (int32_t)(millis() - serviceOutputUntilMillis) >= 0)
+    {
+      stopServiceOutputTest();
+    }
+  }
+
+  if (serviceRgbTestActive &&
+      (int32_t)(millis() - serviceRgbUntilMillis) >= 0)
+  {
+    serviceRgbTestActive = false;
+    serviceRgbTestColor = 0;
+  }
+}
+
+void applyBenchOutputs()
+{
+  if (faultLatched || currentMode == MODE_FAILSAFE || otaInProgress)
+  {
+    stopServiceOutputTest();
+    forceOutputsOff();
+    return;
+  }
+
+  if (serviceOutputTestActive)
+  {
+    digitalWrite(HEATER1_OUT, (serviceOutputMask & 0x01) ? HIGH : LOW);
+    digitalWrite(HEATER2_OUT, (serviceOutputMask & 0x02) ? HIGH : LOW);
+    digitalWrite(HEATER3_OUT, (serviceOutputMask & 0x04) ? HIGH : LOW);
+    return;
+  }
+
+  digitalWrite(HEATER1_OUT, activeStage >= 1 ? HIGH : LOW);
+  digitalWrite(HEATER2_OUT, activeStage >= 2 ? HIGH : LOW);
+  digitalWrite(HEATER3_OUT, activeStage >= 3 ? HIGH : LOW);
+}
+
+
+// =====================================================================
+// SECURITY / RANDOM / HASH
+// =====================================================================
+
+String randomToken(size_t length)
+{
+  static const char alphabet[] =
+    "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    "abcdefghijkmnopqrstuvwxyz"
+    "23456789";
+
+  String result;
+  result.reserve(length);
+
+  for (size_t i = 0; i < length; i++)
+  {
+    uint32_t r = esp_random();
+    result += alphabet[r % (sizeof(alphabet) - 1)];
+  }
+
+  return result;
+}
+
+String randomHex(size_t bytes)
+{
+  static const char hex[] = "0123456789ABCDEF";
+
+  String result;
+  result.reserve(bytes * 2);
+
+  for (size_t i = 0; i < bytes; i++)
+  {
+    uint8_t b = (uint8_t)(esp_random() & 0xFF);
+    result += hex[(b >> 4) & 0x0F];
+    result += hex[b & 0x0F];
+  }
+
+  return result;
+}
+
+String sha256Hex(const String &input)
+{
+  unsigned char digest[32];
+
+  mbedtls_sha256_context ctx;
+  mbedtls_sha256_init(&ctx);
+
+  mbedtls_sha256_starts(&ctx, 0);
+  mbedtls_sha256_update(
+    &ctx,
+    reinterpret_cast<const unsigned char*>(input.c_str()),
+    input.length()
+  );
+  mbedtls_sha256_finish(&ctx, digest);
+  mbedtls_sha256_free(&ctx);
+
+  static const char hex[] = "0123456789abcdef";
+  String out;
+  out.reserve(64);
+
+  for (uint8_t i = 0; i < 32; i++)
+  {
+    out += hex[(digest[i] >> 4) & 0x0F];
+    out += hex[digest[i] & 0x0F];
+  }
+
+  return out;
+}
+
+String makePasswordHash(const String &password)
+{
+  return sha256Hex(authSalt + ":" + password);
+}
+
+bool constantTimeStringEqual(const String &a, const String &b)
+{
+  if (a.length() != b.length())
+    return false;
+
+  uint8_t diff = 0;
+
+  for (size_t i = 0; i < a.length(); i++)
+    diff |= (uint8_t)(a[i] ^ b[i]);
+
+  return diff == 0;
+}
+
+void invalidateWebSession()
+{
+  sessionToken = "";
+  sessionLastActivityMillis = 0;
+}
+
+void generateTemporaryWebPassword()
+{
+  temporaryPassword = "ZHC-" + randomToken(8);
+  passwordHash = makePasswordHash(temporaryPassword);
+  forcePasswordChange = true;
+  invalidateWebSession();
+
+  preferences.begin("zhcauth", false);
+  preferences.putString("salt", authSalt);
+  preferences.putString("hash", passwordHash);
+  preferences.putString("temp", temporaryPassword);
+  preferences.putBool("force", true);
+  preferences.end();
+}
+
+void loadSecuritySettings()
+{
+  preferences.begin("zhcauth", true);
+
+  authSalt = preferences.getString("salt", "");
+  passwordHash = preferences.getString("hash", "");
+  temporaryPassword = preferences.getString("temp", "");
+  forcePasswordChange = preferences.getBool("force", true);
+
+  preferences.end();
+
+  if (authSalt.length() < 16)
+  {
+    authSalt = randomHex(16);
+
+    preferences.begin("zhcauth", false);
+    preferences.putString("salt", authSalt);
+    preferences.end();
+  }
+
+  if (passwordHash.length() != 64)
+  {
+    generateTemporaryWebPassword();
+  }
+}
+
+void saveNewAdminPassword(const String &newPassword)
+{
+  passwordHash = makePasswordHash(newPassword);
+  temporaryPassword = "";
+  forcePasswordChange = false;
+  invalidateWebSession();
+
+  preferences.begin("zhcauth", false);
+  preferences.putString("salt", authSalt);
+  preferences.putString("hash", passwordHash);
+  preferences.remove("temp");
+  preferences.putBool("force", false);
+  preferences.end();
+}
+
+void resetWebCredentials()
+{
+  generateTemporaryWebPassword();
+
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println(" WEB-ZUGANG ZURUECKGESETZT");
+  Serial.println("========================================");
+  Serial.println("Benutzer       : admin");
+  Serial.print("Initialpasswort: ");
+  Serial.println(temporaryPassword);
+  Serial.println();
+  Serial.println("Beim ersten Login muss ein neues");
+  Serial.println("Administrator-Passwort gesetzt werden.");
+  Serial.println("========================================");
+}
+
+bool isLoginLocked()
+{
+  if (loginLockoutUntilMillis == 0)
+    return false;
+
+  if ((int32_t)(millis() - loginLockoutUntilMillis) >= 0)
+  {
+    loginLockoutUntilMillis = 0;
+    failedLoginCount = 0;
+    return false;
+  }
+
+  return true;
+}
+
+String htmlEscape(const String &value)
+{
+  String out;
+  out.reserve(value.length() + 16);
+
+  for (size_t i = 0; i < value.length(); i++)
+  {
+    switch (value[i])
+    {
+      case '&': out += "&amp;"; break;
+      case '<': out += "&lt;"; break;
+      case '>': out += "&gt;"; break;
+      case '"': out += "&quot;"; break;
+      case '\'': out += "&#39;"; break;
+      default: out += value[i]; break;
+    }
+  }
+
+  return out;
+}
+
+String pageHeader(const String &title)
+{
+  String html;
+
+  html += F("<!doctype html><html><head>"
+            "<meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>ZHC - ");
+  html += htmlEscape(title);
+  html += F("</title>"
+            "<style>"
+            "*{box-sizing:border-box}"
+            "body{font-family:Arial,sans-serif;max-width:980px;margin:22px auto;padding:0 16px;background:#0d1117;color:#e6edf3}"
+            ".card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:18px;margin:14px 0}"
+            ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}"
+            ".tile{background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:14px}"
+            "a,button,input,select,textarea{font-size:16px}"
+            "a{color:#58a6ff;text-decoration:none}"
+            "input,select,textarea{width:100%;padding:10px;margin:6px 0 12px;border-radius:8px;border:1px solid #484f58;background:#0d1117;color:#e6edf3}"
+            "textarea{min-height:220px;font-family:monospace}"
+            "button,.btn{display:inline-block;padding:10px 14px;border:0;border-radius:8px;cursor:pointer;background:#238636;color:white;margin:4px 4px 4px 0}"
+            ".danger{background:#da3633}.secondary{background:#30363d}"
+            ".ok{color:#3fb950}.warn{color:#d29922}.err{color:#f85149}"
+            ".nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:15px}"
+            ".nav a{padding:7px 9px;border-radius:6px;background:#161b22}"
+            "table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #30363d;text-align:left}"
+            "label{font-weight:600}"
+            ".small{font-size:13px;color:#8b949e}"
+            "</style></head><body>");
+  html += F("<h1>ZOE Climate Controller</h1>");
+  html += "<div class='nav'>"
+          "<a href='/'>Dashboard</a>"
+          "<a href='/control'>Bedienung</a>"
+          "<a href='/sensors'>Sensoren</a>"
+          "<a href='/regulator'>Regler</a>"
+          "<a href='/learning'>Lernen</a>"
+          "<a href='/diagnostics'>Diagnose</a>"
+          "<a href='/service'>Service</a>"
+          "<a href='/system'>System</a>"
+          "<a href='/update'>Update</a>"
+          "<a href='/logout'>Logout</a>"
+          "</div>";
+
+  return html;
+}
+
+String pageFooter()
+{
+  return F("</body></html>");
+}
+
+String getCookieValue(const String &name)
+{
+  if (!webServer.hasHeader("Cookie"))
+    return "";
+
+  String cookie = webServer.header("Cookie");
+  String key = name + "=";
+
+  int start = cookie.indexOf(key);
+  if (start < 0)
+    return "";
+
+  start += key.length();
+
+  int end = cookie.indexOf(';', start);
+  if (end < 0)
+    end = cookie.length();
+
+  return cookie.substring(start, end);
+}
+
+bool isAuthenticated()
+{
+  if (sessionToken.length() == 0)
+    return false;
+
+  if (millis() - sessionLastActivityMillis > WEB_SESSION_TIMEOUT_MS)
+  {
+    invalidateWebSession();
+    return false;
+  }
+
+  String cookieToken = getCookieValue("ZHCSESSION");
+
+  if (!constantTimeStringEqual(cookieToken, sessionToken))
+    return false;
+
+  sessionLastActivityMillis = millis();
+  return true;
+}
+
+bool requireAuthentication(bool allowForcedPasswordPage = false)
+{
+  if (!isAuthenticated())
+  {
+    webServer.sendHeader("Location", "/login");
+    webServer.send(302, "text/plain", "");
+    return false;
+  }
+
+  if (forcePasswordChange && !allowForcedPasswordPage)
+  {
+    webServer.sendHeader("Location", "/password");
+    webServer.send(302, "text/plain", "");
+    return false;
+  }
+
+  return true;
+}
+
+// =====================================================================
+// WEB PAGES
+// =====================================================================
+
+void handleLoginPage()
+{
+  if (webServer.method() == HTTP_GET)
+  {
+    String html =
+      F("<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>ZHC Login</title>"
+        "<style>body{font-family:Arial;max-width:420px;margin:60px auto;padding:20px;background:#111;color:#eee}"
+        ".card{background:#1d1d1d;padding:24px;border-radius:12px}"
+        "input{width:100%;box-sizing:border-box;padding:11px;margin:6px 0 16px;background:#0d0d0d;color:#fff;border:1px solid #555;border-radius:8px}"
+        "button{padding:10px 16px}</style></head><body>"
+        "<div class='card'><h2>ZOE Climate Controller</h2>"
+        "<form method='post' action='/login'>"
+        "<label>Benutzer</label><input name='user' value='admin' autocomplete='username'>"
+        "<label>Passwort</label><input type='password' name='pass' autocomplete='current-password'>"
+        "<button type='submit'>Anmelden</button>"
+        "</form></div></body></html>");
+
+    webServer.send(200, "text/html; charset=utf-8", html);
+    return;
+  }
+
+  if (isLoginLocked())
+  {
+    webServer.send(429, "text/plain; charset=utf-8",
+                   "Zu viele Fehlversuche. Bitte spaeter erneut versuchen.");
+    return;
+  }
+
+  String user = webServer.arg("user");
+  String pass = webServer.arg("pass");
+
+  bool userOkay = (user == "admin");
+  bool passOkay =
+    constantTimeStringEqual(makePasswordHash(pass), passwordHash);
+
+  if (!userOkay || !passOkay)
+  {
+    failedLoginCount++;
+
+    if (failedLoginCount >= MAX_LOGIN_FAILURES)
+    {
+      loginLockoutUntilMillis = millis() + LOGIN_LOCKOUT_MS;
+      failedLoginCount = 0;
+    }
+
+    webServer.send(401, "text/plain; charset=utf-8",
+                   "Login fehlgeschlagen.");
+    return;
+  }
+
+  failedLoginCount = 0;
+  loginLockoutUntilMillis = 0;
+
+  sessionToken = randomHex(24);
+  sessionLastActivityMillis = millis();
+
+  webServer.sendHeader(
+    "Set-Cookie",
+    "ZHCSESSION=" + sessionToken +
+      "; HttpOnly; SameSite=Strict; Max-Age=900; Path=/"
+  );
+
+  webServer.sendHeader(
+    "Location",
+    forcePasswordChange ? "/password" : "/"
+  );
+
+  webServer.send(302, "text/plain", "");
+}
+
+void handlePasswordPage()
+{
+  if (!requireAuthentication(true))
+    return;
+
+  if (webServer.method() == HTTP_GET)
+  {
+    String html = pageHeader("Passwort");
+
+    html += F("<div class='card'><h2>Administrator-Passwort</h2>");
+
+    if (forcePasswordChange)
+      html += F("<p class='warn'>Ersteinrichtung: Bitte eigenes Passwort setzen.</p>");
+
+    html += F("<form method='post' action='/password'>"
+              "<label>Neues Passwort (mindestens 8 Zeichen)</label>"
+              "<input type='password' name='p1' autocomplete='new-password'>"
+              "<label>Wiederholen</label>"
+              "<input type='password' name='p2' autocomplete='new-password'>"
+              "<button type='submit'>Passwort speichern</button>"
+              "</form></div>");
+
+    html += pageFooter();
+
+    webServer.send(200, "text/html; charset=utf-8", html);
+    return;
+  }
+
+  String p1 = webServer.arg("p1");
+  String p2 = webServer.arg("p2");
+
+  if (p1.length() < 8)
+  {
+    webServer.send(400, "text/plain; charset=utf-8",
+                   "Passwort muss mindestens 8 Zeichen haben.");
+    return;
+  }
+
+  if (p1 != p2)
+  {
+    webServer.send(400, "text/plain; charset=utf-8",
+                   "Passwoerter stimmen nicht ueberein.");
+    return;
+  }
+
+  saveNewAdminPassword(p1);
+
+  webServer.sendHeader("Location", "/login");
+  webServer.send(302, "text/plain", "");
+}
+
+void handleRootPage()
+{
+  if (!requireAuthentication())
+    return;
+
+  String html = pageHeader("Dashboard");
+
+  html += F("<div class='grid'>");
+
+  html += "<div class='tile'><b>Innenraum</b><br><span style='font-size:32px'>";
+  html += isfinite(controlTemp) ? String(controlTemp, 1) + " &deg;C" : "---";
+  html += "</span></div>";
+
+  html += "<div class='tile'><b>Solltemperatur</b><br><span style='font-size:32px'>" +
+          String(cfg.targetTemp, 1) + " &deg;C</span></div>";
+
+  html += "<div class='tile'><b>Betriebsart</b><br><span style='font-size:32px'>" +
+          String(modeName()) + "</span></div>";
+
+  html += "<div class='tile'><b>Heizstufe</b><br><span style='font-size:32px'>" +
+          String(activeStage) + "</span><br>" + String(controllerOutput, 1) + " %</div>";
+
+  html += F("</div>");
+
+  html += F("<div class='card'><h2>Ausgaenge</h2><table>"
+            "<tr><th>Ausgang</th><th>GPIO</th><th>Status</th></tr>");
+  html += "<tr><td>H1</td><td>GPIO8</td><td>" + String(activeStage >= 1 ? "EIN" : "AUS") + "</td></tr>";
+  html += "<tr><td>H2</td><td>GPIO9</td><td>" + String(activeStage >= 2 ? "EIN" : "AUS") + "</td></tr>";
+  html += "<tr><td>H3</td><td>GPIO10</td><td>" + String(activeStage >= 3 ? "EIN" : "AUS") + "</td></tr>";
+  html += F("</table><p class='small'>H1/H2/H3 sind ausschliesslich 3,3-V-Logik-/Bench-Ausgaenge.</p></div>");
+
+  html += F("<div class='card'><h2>Sicherheit</h2><table>");
+  html += "<tr><td>Safety-Lock</td><td>";
+  html += faultLatched ? "<span class='err'>AKTIV</span>" : "<span class='ok'>AUS</span>";
+  html += "</td></tr>";
+  html += "<tr><td>Aktiver Fehler</td><td>" + String(faultName(activeFault)) + "</td></tr>";
+  html += "<tr><td>Warnung</td><td>" + String(warningName(activeWarning)) + "</td></tr>";
+  html += F("</table></div>");
+
+  html += F("<div class='card'><a class='btn' href='/control'>Bedienung</a>"
+            "<a class='btn secondary' href='/sensors'>Sensoren</a>"
+            "<a class='btn secondary' href='/diagnostics'>Diagnose</a></div>");
+
+  html += pageFooter();
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+String sensorWebValue(SensorRole &role)
+{
+  if (!role.assigned)
+    return "nicht zugewiesen";
+
+  if (!role.present)
+    return "nicht gefunden";
+
+  if (!role.valid)
+    return "ungueltig";
+
+  return String(role.temperature, 2) + " &deg;C";
+}
+
+String sensorSelectHtml(const String &name, SensorRoleId roleId)
+{
+  scanSensors();
+  SensorRole* role = getRole(roleId);
+
+  String html = "<select name='" + name + "'>";
+  html += "<option value='-1'>nicht zugewiesen</option>";
+
+  for (uint8_t i = 0; i < discoveredSensorCount; i++)
+  {
+    bool selected = role && role->assigned &&
+                    addressEqual(role->address, discoveredSensors[i]);
+
+    html += "<option value='" + String(i) + "'";
+    if (selected) html += " selected";
+    html += ">[" + String(i) + "] " + addressToString(discoveredSensors[i]) + "</option>";
+  }
+
+  html += "</select>";
+  return html;
+}
+
+void applySensorWebAssignment(const char* argName, SensorRoleId roleId)
+{
+  if (!webServer.hasArg(argName))
+    return;
+
+  int index = webServer.arg(argName).toInt();
+
+  if (index < 0)
+    unassignSensor(roleId);
+  else
+    assignSensor(roleId, index);
+}
+
+void handleSensorsPage()
+{
+  if (!requireAuthentication())
+    return;
+
+  if (webServer.method() == HTTP_POST)
+  {
+    SensorRole oldLow = sensorLow;
+    SensorRole oldHigh = sensorHigh;
+    SensorRole oldOutside = sensorOutside;
+    SensorRole oldSafety = sensorSafety;
+
+    applySensorWebAssignment("low", ROLE_LOW);
+    applySensorWebAssignment("high", ROLE_HIGH);
+    applySensorWebAssignment("outside", ROLE_OUTSIDE);
+    applySensorWebAssignment("safety", ROLE_SAFETY);
+
+    if (webServer.hasArg("lowoff")) sensorLow.offset = webServer.arg("lowoff").toFloat();
+    if (webServer.hasArg("highoff")) sensorHigh.offset = webServer.arg("highoff").toFloat();
+    if (webServer.hasArg("outoff")) sensorOutside.offset = webServer.arg("outoff").toFloat();
+    if (webServer.hasArg("safeoff")) sensorSafety.offset = webServer.arg("safeoff").toFloat();
+
+    if (configValid())
+    {
+      saveSettings();
+      scanSensors();
+    }
+    else
+    {
+      sensorLow = oldLow;
+      sensorHigh = oldHigh;
+      sensorOutside = oldOutside;
+      sensorSafety = oldSafety;
+    }
+
+    webServer.sendHeader("Location", "/sensors");
+    webServer.send(303, "text/plain", "");
+    return;
+  }
+
+  scanSensors();
+
+  String html = pageHeader("Sensoren");
+
+  html += F("<div class='card'><h2>Livewerte</h2><table>");
+  html += "<tr><td>CABIN_LOW</td><td>" + sensorWebValue(sensorLow) + "</td></tr>";
+  html += "<tr><td>CABIN_HIGH</td><td>" + sensorWebValue(sensorHigh) + "</td></tr>";
+  html += "<tr><td>OUTSIDE</td><td>" + sensorWebValue(sensorOutside) + "</td></tr>";
+  html += "<tr><td>SAFETY</td><td>" + sensorWebValue(sensorSafety) + "</td></tr>";
+  html += "<tr><td>Virtual Cabin</td><td>";
+  html += isfinite(controlTemp) ? String(controlTemp, 2) + " &deg;C" : "---";
+  html += "</td></tr>";
+  html += "<tr><td>Schichtung</td><td>";
+  html += isfinite(stratification) ? String(stratification, 2) + " K" : "---";
+  html += "</td></tr></table></div>";
+
+  html += "<div class='card'><h2>Sensor-Zuordnung</h2>"
+          "<p>Gefundene DS18B20: " + String(discoveredSensorCount) + "</p>"
+          "<form method='post' action='/sensors'>";
+
+  html += "<label>CABIN_LOW</label>" + sensorSelectHtml("low", ROLE_LOW);
+  html += "<label>Offset LOW [K]</label><input name='lowoff' type='number' step='0.1' value='" + String(sensorLow.offset, 2) + "'>";
+
+  html += "<label>CABIN_HIGH</label>" + sensorSelectHtml("high", ROLE_HIGH);
+  html += "<label>Offset HIGH [K]</label><input name='highoff' type='number' step='0.1' value='" + String(sensorHigh.offset, 2) + "'>";
+
+  html += "<label>OUTSIDE</label>" + sensorSelectHtml("outside", ROLE_OUTSIDE);
+  html += "<label>Offset OUTSIDE [K]</label><input name='outoff' type='number' step='0.1' value='" + String(sensorOutside.offset, 2) + "'>";
+
+  html += "<label>SAFETY (optional)</label>" + sensorSelectHtml("safety", ROLE_SAFETY);
+  html += "<label>Offset SAFETY [K]</label><input name='safeoff' type='number' step='0.1' value='" + String(sensorSafety.offset, 2) + "'>";
+
+  html += F("<button type='submit'>Sensoren speichern</button></form>"
+            "<p class='small'>Alle DS18B20 liegen gemeinsam auf GPIO7 (1-Wire DATA).</p></div>");
+
+  html += pageFooter();
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+
+void handleControlPage()
+{
+  if (!requireAuthentication())
+    return;
+
+  if (webServer.method() == HTTP_POST)
+  {
+    Settings oldCfg = cfg;
+
+    if (webServer.hasArg("target"))
+      cfg.targetTemp = webServer.arg("target").toFloat();
+
+    if (webServer.hasArg("deadband"))
+      cfg.deadBand = webServer.arg("deadband").toFloat();
+
+    if (webServer.hasArg("restart"))
+      cfg.restartDelta = webServer.arg("restart").toFloat();
+
+    if (!configValid())
+    {
+      cfg = oldCfg;
+      webServer.send(400, "text/plain; charset=utf-8", "Ungueltige Einstellung.");
+      return;
+    }
+
+    String mode = webServer.arg("mode");
+    if (mode == "oem") setMode(MODE_OEM);
+    else if (mode == "auto") setMode(MODE_AUTO);
+    else if (mode == "boost") setMode(MODE_BOOST);
+    else if (mode == "manual") setMode(MODE_MANUAL);
+
+    if (webServer.hasArg("stage"))
+    {
+      int s = webServer.arg("stage").toInt();
+      if (s >= 0 && s <= 3) manualStage = s;
+    }
+
+    saveSettings();
+    webServer.sendHeader("Location", "/control");
+    webServer.send(303, "text/plain", "");
+    return;
+  }
+
+  String html = pageHeader("Bedienung");
+  html += F("<div class='card'><h2>Betriebsart / Komfort</h2>"
+            "<form method='post' action='/control'>");
+
+  html += "<label>Betriebsart</label><select name='mode'>";
+  html += "<option value='oem'" + String(currentMode == MODE_OEM ? " selected" : "") + ">OEM / eigene Heizung AUS</option>";
+  html += "<option value='auto'" + String(currentMode == MODE_AUTO ? " selected" : "") + ">AUTO</option>";
+  html += "<option value='boost'" + String(currentMode == MODE_BOOST ? " selected" : "") + ">BOOST</option>";
+  html += "<option value='manual'" + String(currentMode == MODE_MANUAL ? " selected" : "") + ">MANUAL</option>";
+  html += "</select>";
+
+  html += "<label>Solltemperatur [&deg;C]</label><input name='target' type='number' min='15' max='28' step='0.1' value='" + String(cfg.targetTemp, 2) + "'>";
+  html += "<label>Totband [K]</label><input name='deadband' type='number' min='0.1' max='2' step='0.05' value='" + String(cfg.deadBand, 2) + "'>";
+  html += "<label>Wiedereinschalt-Differenz [K]</label><input name='restart' type='number' min='0.1' max='5' step='0.05' value='" + String(cfg.restartDelta, 2) + "'>";
+  html += "<label>Manuelle Stufe 0..3</label><input name='stage' type='number' min='0' max='3' step='1' value='" + String(manualStage) + "'>";
+
+  html += F("<button type='submit'>Speichern / anwenden</button></form>"
+            "<p class='small'>AUTO/BOOST/MANUAL starten nur, wenn Sensorik und Safety-Bedingungen gueltig sind.</p></div>");
+
+  html += pageFooter();
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleRegulatorPage()
+{
+  if (!requireAuthentication())
+    return;
+
+  if (webServer.method() == HTTP_POST)
+  {
+    Settings oldCfg = cfg;
+
+    cfg.kp = webServer.arg("kp").toFloat();
+    cfg.ki = webServer.arg("ki").toFloat();
+    cfg.trendGain = webServer.arg("trend").toFloat();
+    cfg.stage1Threshold = webServer.arg("st1").toFloat();
+    cfg.stage2Threshold = webServer.arg("st2").toFloat();
+    cfg.stage3Threshold = webServer.arg("st3").toFloat();
+    cfg.minStageTimeSec = (uint32_t)webServer.arg("mintime").toInt();
+    cfg.stageDelaySec = (uint32_t)webServer.arg("delay").toInt();
+    cfg.boostTimeSec = (uint32_t)webServer.arg("boost").toInt();
+    cfg.safetyMaxDifference = webServer.arg("safediff").toFloat();
+    cfg.safetyDifferenceDelaySec = (uint32_t)webServer.arg("safedelay").toInt();
+    cfg.emergencyMaxTemp = webServer.arg("emergency").toFloat();
+    cfg.sensorTimeoutSec = (uint32_t)webServer.arg("sensorto").toInt();
+    cfg.maxTempJump = webServer.arg("tempjump").toFloat();
+
+    if (!configValid())
+    {
+      cfg = oldCfg;
+      webServer.send(400, "text/plain; charset=utf-8", "Ungueltige Reglerkonfiguration.");
+      return;
+    }
+
+    saveSettings();
+    webServer.sendHeader("Location", "/regulator");
+    webServer.send(303, "text/plain", "");
+    return;
+  }
+
+  String html = pageHeader("Regler");
+  html += F("<div class='card'><h2>PI / Heizstufen / Sicherheit</h2><form method='post' action='/regulator'>");
+
+  html += "<label>Kp</label><input name='kp' type='number' step='0.1' value='" + String(cfg.kp, 2) + "'>";
+  html += "<label>Ki</label><input name='ki' type='number' step='0.01' value='" + String(cfg.ki, 3) + "'>";
+  html += "<label>Trend Gain</label><input name='trend' type='number' step='0.1' value='" + String(cfg.trendGain, 2) + "'>";
+
+  html += "<label>Stufe 1 Schwelle [%]</label><input name='st1' type='number' step='1' value='" + String(cfg.stage1Threshold, 1) + "'>";
+  html += "<label>Stufe 2 Schwelle [%]</label><input name='st2' type='number' step='1' value='" + String(cfg.stage2Threshold, 1) + "'>";
+  html += "<label>Stufe 3 Schwelle [%]</label><input name='st3' type='number' step='1' value='" + String(cfg.stage3Threshold, 1) + "'>";
+
+  html += "<label>Mindestzeit Stufe [s]</label><input name='mintime' type='number' value='" + String(cfg.minStageTimeSec) + "'>";
+  html += "<label>Stufenverzoegerung [s]</label><input name='delay' type='number' value='" + String(cfg.stageDelaySec) + "'>";
+  html += "<label>Boost-Zeit [s]</label><input name='boost' type='number' value='" + String(cfg.boostTimeSec) + "'>";
+
+  html += "<label>SAFETY max. Abweichung [K]</label><input name='safediff' type='number' step='0.1' value='" + String(cfg.safetyMaxDifference, 2) + "'>";
+  html += "<label>SAFETY Verzoegerung [s]</label><input name='safedelay' type='number' value='" + String(cfg.safetyDifferenceDelaySec) + "'>";
+  html += "<label>Not-Aus Temperatur [&deg;C]</label><input name='emergency' type='number' step='0.5' value='" + String(cfg.emergencyMaxTemp, 1) + "'>";
+  html += "<label>Sensor Timeout [s]</label><input name='sensorto' type='number' value='" + String(cfg.sensorTimeoutSec) + "'>";
+  html += "<label>Max. Temperatursprung [K]</label><input name='tempjump' type='number' step='0.1' value='" + String(cfg.maxTempJump, 1) + "'>";
+
+  html += F("<button type='submit'>Regler speichern</button></form></div>");
+  html += pageFooter();
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleLearningPage()
+{
+  if (!requireAuthentication())
+    return;
+
+  if (webServer.method() == HTTP_POST)
+  {
