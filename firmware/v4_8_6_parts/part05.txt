@@ -1,0 +1,800 @@
+{
+  preferences.begin("zoeheat", false);
+
+  preferences.putFloat("target", cfg.targetTemp);
+  preferences.putFloat("deadband", cfg.deadBand);
+  preferences.putFloat("restart", cfg.restartDelta);
+
+  preferences.putFloat("wLow", cfg.weightLow);
+  preferences.putFloat("wHigh", cfg.weightHigh);
+
+  preferences.putFloat("kp", cfg.kp);
+  preferences.putFloat("ki", cfg.ki);
+  preferences.putFloat("trend", cfg.trendGain);
+
+  preferences.putFloat("st1", cfg.stage1Threshold);
+  preferences.putFloat("st2", cfg.stage2Threshold);
+  preferences.putFloat("st3", cfg.stage3Threshold);
+
+  preferences.putUInt("mintime", cfg.minStageTimeSec);
+  preferences.putUInt("delay", cfg.stageDelaySec);
+
+  preferences.putUInt("boost", cfg.boostTimeSec);
+
+  preferences.putBool("learning", cfg.learningEnabled);
+  preferences.putFloat("learnrate", cfg.learningRate);
+  preferences.putUInt("learntime", cfg.learningMinTimeSec);
+
+  preferences.putFloat("gain1", model.gainStage1);
+  preferences.putFloat("gain2", model.gainStage2);
+  preferences.putFloat("gain3", model.gainStage3);
+  preferences.putFloat("coast", model.coastTemp);
+
+  preferences.putFloat("emergency", cfg.emergencyMaxTemp);
+  preferences.putUInt("sensTO", cfg.sensorTimeoutSec);
+  preferences.putFloat("tempjump", cfg.maxTempJump);
+
+  preferences.putFloat("safeDiff", cfg.safetyMaxDifference);
+  preferences.putUInt("safeDelay", cfg.safetyDifferenceDelaySec);
+
+  preferences.end();
+
+  preferences.begin("zoesensors", false);
+
+  saveRole(preferences, "lowAdr", sensorLow);
+  saveRole(preferences, "highAdr", sensorHigh);
+  saveRole(preferences, "outAdr", sensorOutside);
+  saveRole(preferences, "safeAdr", sensorSafety);
+
+  preferences.putFloat("lowOff", sensorLow.offset);
+  preferences.putFloat("highOff", sensorHigh.offset);
+  preferences.putFloat("outOff", sensorOutside.offset);
+  preferences.putFloat("safeOff", sensorSafety.offset);
+
+  preferences.end();
+
+  Serial.println("Alle Einstellungen gespeichert.");
+}
+
+void loadSettings()
+{
+  preferences.begin("zoeheat", true);
+
+  cfg.targetTemp = preferences.getFloat("target", 21.0f);
+  cfg.deadBand = preferences.getFloat("deadband", 0.25f);
+  cfg.restartDelta = preferences.getFloat("restart", 0.50f);
+
+  cfg.weightLow = preferences.getFloat("wLow", 40.0f);
+  cfg.weightHigh = preferences.getFloat("wHigh", 60.0f);
+
+  cfg.kp = preferences.getFloat("kp", 22.0f);
+  cfg.ki = preferences.getFloat("ki", 0.12f);
+  cfg.trendGain = preferences.getFloat("trend", 25.0f);
+
+  cfg.stage1Threshold = preferences.getFloat("st1", 20.0f);
+  cfg.stage2Threshold = preferences.getFloat("st2", 50.0f);
+  cfg.stage3Threshold = preferences.getFloat("st3", 80.0f);
+
+  cfg.minStageTimeSec = preferences.getUInt("mintime", 60);
+  cfg.stageDelaySec = preferences.getUInt("delay", 30);
+
+  cfg.boostTimeSec = preferences.getUInt("boost", 300);
+
+  cfg.learningEnabled = preferences.getBool("learning", true);
+  cfg.learningRate = preferences.getFloat("learnrate", 0.05f);
+  cfg.learningMinTimeSec = preferences.getUInt("learntime", 120);
+
+  model.gainStage1 = preferences.getFloat("gain1", 0.08f);
+  model.gainStage2 = preferences.getFloat("gain2", 0.18f);
+  model.gainStage3 = preferences.getFloat("gain3", 0.32f);
+  model.coastTemp = preferences.getFloat("coast", 0.30f);
+
+  cfg.emergencyMaxTemp = preferences.getFloat("emergency", 35.0f);
+  cfg.sensorTimeoutSec = preferences.getUInt("sensTO", 10);
+  cfg.maxTempJump = preferences.getFloat("tempjump", 4.0f);
+
+  cfg.safetyMaxDifference = preferences.getFloat("safeDiff", 3.0f);
+  cfg.safetyDifferenceDelaySec = preferences.getUInt("safeDelay", 30);
+
+  preferences.end();
+
+  preferences.begin("zoesensors", true);
+
+  loadRole(preferences, "lowAdr", sensorLow);
+  loadRole(preferences, "highAdr", sensorHigh);
+  loadRole(preferences, "outAdr", sensorOutside);
+  loadRole(preferences, "safeAdr", sensorSafety);
+
+  sensorLow.offset = preferences.getFloat("lowOff", 0.0f);
+  sensorHigh.offset = preferences.getFloat("highOff", 0.0f);
+  sensorOutside.offset = preferences.getFloat("outOff", 0.0f);
+  sensorSafety.offset = preferences.getFloat("safeOff", 0.0f);
+
+  preferences.end();
+}
+
+void loadDefaults()
+{
+  cfg = Settings();
+  model = ThermalModel();
+
+  integralTerm = 0.0f;
+  targetHoldActive = false;
+
+  Serial.println("Regler-/System-Defaultwerte geladen.");
+  Serial.println("Sensor-Zuweisungen bleiben erhalten.");
+}
+
+// =====================================================================
+// CONTROL
+// =====================================================================
+
+void calculateController()
+{
+  if (!isfinite(controlTemp))
+  {
+    requestedStage = 0;
+    controllerOutput = 0.0f;
+    return;
+  }
+
+  temperatureError =
+    cfg.targetTemp - controlTemp;
+
+  // Zielbereich erreicht
+  if (controlTemp >= cfg.targetTemp - cfg.deadBand)
+  {
+    targetHoldActive = true;
+  }
+
+  // Hysterese / Wiedereinschaltung
+  if (targetHoldActive &&
+      controlTemp > cfg.targetTemp - cfg.restartDelta)
+  {
+    requestedStage = 0;
+    controllerOutput = 0.0f;
+    integralTerm *= 0.90f;
+    return;
+  }
+
+  if (controlTemp <= cfg.targetTemp - cfg.restartDelta)
+  {
+    targetHoldActive = false;
+  }
+
+  proportionalTerm =
+    temperatureError * cfg.kp;
+
+  integralTerm +=
+    temperatureError * cfg.ki;
+
+  integralTerm =
+    constrain(
+      integralTerm,
+      0.0f,
+      cfg.integralLimit
+    );
+
+  trendCorrection = 0.0f;
+
+  if (tempTrendPerMinute > 0.0f)
+  {
+    trendCorrection =
+      tempTrendPerMinute * cfg.trendGain;
+  }
+
+  predictedTemp =
+    controlTemp +
+    model.coastTemp +
+    tempTrendPerMinute;
+
+  if (predictedTemp >= cfg.targetTemp)
+  {
+    trendCorrection += 15.0f;
+  }
+
+  // -----------------------------------------------------------
+  // Schichtungs-/HIGH-Zone-Korrektur
+  // Wenn oben bereits waermer als Soll, Leistung reduzieren.
+  // LOW/HIGH-Differenz allein ist KEIN Fehler.
+  // -----------------------------------------------------------
+
+  stratificationCorrection = 0.0f;
+
+  if (sensorHigh.valid)
+  {
+    float highOver =
+      sensorHigh.temperature -
+      (cfg.targetTemp + cfg.highZoneLimitOffset);
+
+    if (highOver > 0.0f)
+    {
+      stratificationCorrection =
+        min(
+          highOver * cfg.highZoneReduceGain,
+          cfg.highZoneMaxReduction
+        );
+    }
+  }
+
+  controllerOutput =
+    proportionalTerm +
+    integralTerm -
+    trendCorrection -
+    stratificationCorrection;
+
+  if (!isfinite(controllerOutput))
+  {
+    enterFailsafe(FAULT_CONTROLLER_INVALID);
+    return;
+  }
+
+  controllerOutput =
+    constrain(
+      controllerOutput,
+      0.0f,
+      100.0f
+    );
+
+  if (controllerOutput < cfg.stage1Threshold)
+    requestedStage = 0;
+  else if (controllerOutput < cfg.stage2Threshold)
+    requestedStage = 1;
+  else if (controllerOutput < cfg.stage3Threshold)
+    requestedStage = 2;
+  else
+    requestedStage = 3;
+}
+
+void processStageManager()
+{
+  if (faultLatched)
+  {
+    activeStage = 0;
+    return;
+  }
+
+  if (requestedStage > 3 || activeStage > 3)
+  {
+    enterFailsafe(FAULT_OUTPUT_INVALID);
+    return;
+  }
+
+  if (requestedStage == activeStage)
+    return;
+
+  uint32_t elapsedSec =
+    (millis() - lastStageChangeMillis) / 1000UL;
+
+  uint32_t requiredDelay =
+    max(cfg.minStageTimeSec, cfg.stageDelaySec);
+
+  if (elapsedSec < requiredDelay)
+    return;
+
+  // Immer nur eine Stufe je Wechsel
+  if (requestedStage > activeStage)
+    activeStage++;
+  else
+    activeStage--;
+
+  lastStageChangeMillis = millis();
+
+  Serial.print("Heizstufe -> ");
+  Serial.println(activeStage);
+}
+
+// =====================================================================
+// LEARNING
+// =====================================================================
+
+void stopLearningMeasurement()
+{
+  learningStage = 0;
+  learningStartTemp = NAN;
+  learningStartOutsideTemp = NAN;
+  learningStartMillis = 0;
+}
+
+void startLearningMeasurement(uint8_t stage)
+{
+  if (!isfinite(controlTemp))
+    return;
+
+  learningStage = stage;
+  learningStartTemp = controlTemp;
+
+  learningStartOutsideTemp =
+    sensorOutside.valid
+      ? sensorOutside.temperature
+      : NAN;
+
+  learningStartMillis = millis();
+}
+
+void updateLearning()
+{
+  if (!cfg.learningEnabled) return;
+  if (faultLatched) return;
+  if (currentMode != MODE_AUTO) return;
+  if (!isfinite(controlTemp)) return;
+
+  if (activeStage == 0)
+  {
+    stopLearningMeasurement();
+    return;
+  }
+
+  if (learningStage != activeStage)
+  {
+    startLearningMeasurement(activeStage);
+    return;
+  }
+
+  uint32_t elapsedSec =
+    (millis() - learningStartMillis) / 1000UL;
+
+  if (elapsedSec < cfg.learningMinTimeSec)
+    return;
+
+  float elapsedMin =
+    elapsedSec / 60.0f;
+
+  float measuredGain =
+    (controlTemp - learningStartTemp) / elapsedMin;
+
+  if (!isfinite(measuredGain) ||
+      fabs(measuredGain) > cfg.maxLearningTrend)
+  {
+    activeWarning = WARNING_LEARNING_IMPLAUSIBLE;
+    startLearningMeasurement(activeStage);
+    return;
+  }
+
+  float lr = cfg.learningRate;
+
+  switch (activeStage)
+  {
+    case 1:
+      model.gainStage1 =
+        model.gainStage1 * (1.0f - lr) +
+        measuredGain * lr;
+      model.samplesStage1++;
+      break;
+
+    case 2:
+      model.gainStage2 =
+        model.gainStage2 * (1.0f - lr) +
+        measuredGain * lr;
+      model.samplesStage2++;
+      break;
+
+    case 3:
+      model.gainStage3 =
+        model.gainStage3 * (1.0f - lr) +
+        measuredGain * lr;
+      model.samplesStage3++;
+      break;
+  }
+
+  startLearningMeasurement(activeStage);
+}
+
+// =====================================================================
+// HEATING RESPONSE
+// =====================================================================
+
+void monitorHeatingResponse()
+{
+  if (activeStage == 0 || !isfinite(controlTemp))
+  {
+    heatRiseStartMillis = 0;
+    heatRiseStartTemp = NAN;
+    return;
+  }
+
+  if (heatRiseStartMillis == 0)
+  {
+    heatRiseStartMillis = millis();
+    heatRiseStartTemp = controlTemp;
+    return;
+  }
+
+  uint32_t elapsedSec =
+    (millis() - heatRiseStartMillis) / 1000UL;
+
+  if (elapsedSec >= cfg.noHeatRiseWarningSec)
+  {
+    float rise =
+      controlTemp - heatRiseStartTemp;
+
+    if (rise < 0.2f)
+      activeWarning = WARNING_TEMP_RISE_LOW;
+
+    heatRiseStartMillis = millis();
+    heatRiseStartTemp = controlTemp;
+  }
+}
+
+
+// =====================================================================
+// CONTROL-START FREIGABE
+// =====================================================================
+
+bool controlStartReady()
+{
+  scanSensors();
+
+  // Mindestens LOW oder HIGH muss zugewiesen sein.
+  if (!anyCabinRoleAssigned())
+  {
+    Serial.println();
+    Serial.println("AUTO/BOOST/MANUAL nicht gestartet:");
+    Serial.println("Kein Innenraumsensor zugewiesen.");
+    Serial.println("Bitte 'sensor scan' und danach 'sensor setup' verwenden.");
+    return false;
+  }
+
+  // Mindestens einer der zugewiesenen Innenraumsensoren muss aktuell
+  // vorhanden und gueltig sein.
+  if (!anyCabinSensorValid())
+  {
+    Serial.println();
+    Serial.println("AUTO/BOOST/MANUAL nicht gestartet:");
+    Serial.println("Kein gueltiger Innenraumsensor verfuegbar.");
+    Serial.println("Bitte 'sensor status' oder 'analyse' verwenden.");
+    return false;
+  }
+
+  return true;
+}
+
+// =====================================================================
+// MODES
+// =====================================================================
+
+void setMode(ControllerMode newMode)
+{
+  // OEM ist ein harter Sofort-AUS-Zustand.
+  // Kein Stufenabbau, keine Mindestlaufzeit, keine Verzoegerung.
+  if (newMode == MODE_OEM)
+  {
+    currentMode = MODE_OEM;
+    boostStartMillis = 0;
+
+    stopServiceOutputTest();
+    allOutputsOffImmediate();
+
+    Serial.println("MODE -> OEM (H1/H2/H3 sofort AUS)");
+    return;
+  }
+
+  // Das Terminal bleibt auch bei FAILSAFE voll bedienbar.
+  // Gesperrt wird nur die eigene Heizfreigabe.
+  if (faultLatched &&
+      newMode != MODE_FAILSAFE &&
+      newMode != MODE_OEM)
+  {
+    Serial.println("Heizmodus gesperrt: Safety-Lock aktiv.");
+    Serial.println("Befehl 'analyse' zeigt die Ursache.");
+    return;
+  }
+
+  // Vor Start einer eigenen Regelung erst Sensorik pruefen.
+  if ((newMode == MODE_AUTO ||
+       newMode == MODE_BOOST ||
+       newMode == MODE_MANUAL) &&
+      !controlStartReady())
+  {
+    currentMode = MODE_OEM;
+    requestedStage = 0;
+    activeStage = 0;
+    controllerOutput = 0.0f;
+    forceOutputsOff();
+    activeWarning = WARNING_SETUP_REQUIRED;
+    return;
+  }
+
+  currentMode = newMode;
+  integralTerm = 0.0f;
+  targetHoldActive = false;
+
+  if (currentMode == MODE_BOOST)
+  {
+    boostStartMillis = millis();
+  }
+
+  Serial.print("MODE -> ");
+  Serial.println(modeName());
+}
+
+void processMode()
+{
+  if (faultLatched)
+  {
+    currentMode = MODE_FAILSAFE;
+    requestedStage = 0;
+    controllerOutput = 0.0f;
+    return;
+  }
+
+  switch (currentMode)
+  {
+    case MODE_OEM:
+      // OEM muss die eigenen Ausgaenge jederzeit sicher AUS halten.
+      allOutputsOffImmediate();
+      break;
+
+    case MODE_AUTO:
+      calculateController();
+      break;
+
+    case MODE_BOOST:
+      requestedStage = 3;
+      controllerOutput = 100.0f;
+
+      if ((millis() - boostStartMillis) / 1000UL >= cfg.boostTimeSec)
+      {
+        Serial.println("BOOST beendet.");
+        setMode(MODE_AUTO);
+      }
+      break;
+
+    case MODE_MANUAL:
+      requestedStage = manualStage;
+      controllerOutput = manualStage * 33.33f;
+      break;
+
+    case MODE_FAILSAFE:
+      requestedStage = 0;
+      activeStage = 0;
+      controllerOutput = 0.0f;
+      forceOutputsOff();
+      break;
+  }
+}
+
+// =====================================================================
+// SAFETY SUPERVISOR
+// =====================================================================
+
+void safetySupervisor()
+{
+  if (faultLatched)
+  {
+    requestedStage = 0;
+    activeStage = 0;
+    forceOutputsOff();
+    return;
+  }
+
+  if (!configValid())
+  {
+    enterFailsafe(FAULT_CONFIG_INVALID);
+    return;
+  }
+
+  if (requestedStage > 3 || activeStage > 3)
+  {
+    enterFailsafe(FAULT_OUTPUT_INVALID);
+    return;
+  }
+
+  if (!isfinite(controllerOutput) ||
+      !isfinite(integralTerm))
+  {
+    enterFailsafe(FAULT_CONTROLLER_INVALID);
+    return;
+  }
+}
+
+void checkControlCycleTimeout()
+{
+  if (lastControlCycleMillis == 0)
+    return;
+
+  uint32_t timeoutMs =
+    CONTROL_INTERVAL_MS * 4;
+
+  if (millis() - lastControlCycleMillis > timeoutMs)
+  {
+    enterFailsafe(FAULT_CONTROL_TIMEOUT);
+  }
+}
+
+// =====================================================================
+// BUTTON
+// =====================================================================
+
+void shortButtonPress()
+{
+  if (faultLatched)
+  {
+    Serial.println("Taster ignoriert: FAILSAFE aktiv.");
+    return;
+  }
+
+  switch (currentMode)
+  {
+    case MODE_OEM:
+      setMode(MODE_AUTO);
+      break;
+
+    case MODE_AUTO:
+      setMode(MODE_BOOST);
+      break;
+
+    case MODE_BOOST:
+    case MODE_MANUAL:
+      setMode(MODE_OEM);
+      break;
+
+    case MODE_FAILSAFE:
+      break;
+  }
+}
+
+void longButtonPress()
+{
+  requestedStage = 0;
+  activeStage = 0;
+  forceOutputsOff();
+
+  if (faultLatched)
+  {
+    currentMode = MODE_FAILSAFE;
+    Serial.println("Longpress: FAILSAFE bleibt aktiv.");
+  }
+  else
+  {
+    setMode(MODE_OEM);
+    Serial.println("Longpress -> OEM");
+  }
+}
+
+void clearFaultsAndRestartFromButton()
+{
+  // Vor jedem Neustart eigene Ausgaenge sofort in sicheren Zustand bringen.
+  stopServiceOutputTest();
+  allOutputsOffImmediate();
+  currentMode = MODE_OEM;
+
+  activeFault = FAULT_NONE;
+  activeWarning = WARNING_NONE;
+  faultLatched = false;
+  faultUnread = false;
+
+  // Nur den persistenten letzten Fehler loeschen.
+  // Einstellungen, WLAN und Zugangsdaten bleiben unangetastet.
+  preferences.begin("zoefault", false);
+  preferences.clear();
+  preferences.end();
+
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println("TASTER >10s: FEHLER-RESET + NEUSTART");
+  Serial.println("H1/H2/H3 = AUS");
+  Serial.println("Fehler/Safety-Lock/Warnung = geloescht");
+  Serial.println("ESP32 startet neu...");
+  Serial.println("========================================");
+
+  delay(250);
+  ESP.restart();
+}
+
+void processButton()
+{
+  bool reading =
+    digitalRead(PIN_BUTTON);
+
+  if (reading != lastButtonReading)
+  {
+    buttonChangeMillis = millis();
+    lastButtonReading = reading;
+  }
+
+  if (millis() - buttonChangeMillis > BUTTON_DEBOUNCE_MS)
+  {
+    if (reading != stableButtonState)
+    {
+      stableButtonState = reading;
+
+      if (stableButtonState == LOW)
+      {
+        buttonPressMillis = millis();
+        longPressHandled = false;
+        resetHoldTriggered = false;
+      }
+      else
+      {
+        if (!longPressHandled)
+          shortButtonPress();
+      }
+    }
+  }
+
+  if (stableButtonState == LOW &&
+      !longPressHandled &&
+      millis() - buttonPressMillis >= BUTTON_LONGPRESS_MS)
+  {
+    longPressHandled = true;
+    longButtonPress();
+  }
+
+  // Separater sehr langer Tastendruck:
+  // Die 1,5-s-Funktion darf vorher ausgefuehrt werden,
+  // nach 10 s wird jedoch zusaetzlich der Reset/Neustart ausgeloest.
+  if (stableButtonState == LOW &&
+      !resetHoldTriggered &&
+      millis() - buttonPressMillis >= BUTTON_RESET_HOLD_MS)
+  {
+    resetHoldTriggered = true;
+    clearFaultsAndRestartFromButton();
+  }
+}
+
+// =====================================================================
+// RGB STATUS
+// =====================================================================
+
+void applyStagePulseToBase(uint8_t baseR, uint8_t baseG, uint8_t baseB, uint8_t stage)
+{
+  // Zyklus: 4 Sekunden. Innerhalb des ersten Teils 1/2/3 helle Impulse.
+  // Danach ruhige Grundfarbe.
+  const uint32_t cycleMs = 4000UL;
+  const uint32_t pulseOnMs = 160UL;
+  const uint32_t pulseOffMs = 180UL;
+
+  uint32_t phase = millis() % cycleMs;
+
+  if (stage > 3) stage = 3;
+
+  bool pulse = false;
+  for (uint8_t i = 0; i < stage; i++)
+  {
+    uint32_t start = i * (pulseOnMs + pulseOffMs);
+    if (phase >= start && phase < (start + pulseOnMs))
+    {
+      pulse = true;
+      break;
+    }
+  }
+
+  if (pulse)
+  {
+    // Gleiche Modusfarbe, aber deutlich heller.
+    uint8_t r = baseR > 0 ? 255 : 0;
+    uint8_t g = baseG > 0 ? 255 : 0;
+    uint8_t b = baseB > 0 ? 255 : 0;
+
+    // Orange soll orange bleiben und nicht gelb/weiss werden.
+    if (baseR > 0 && baseG > 0 && baseB == 0)
+    {
+      r = 255;
+      g = 180;
+      b = 0;
+    }
+
+    setRGB(r, g, b);
+  }
+  else
+  {
+    setRGB(baseR, baseG, baseB);
+  }
+}
+
+void updateRGB()
+{
+  if (serviceRgbTestActive)
+  {
+    if ((int32_t)(millis() - serviceRgbUntilMillis) >= 0)
+    {
+      serviceRgbTestActive = false;
+      serviceRgbTestColor = 0;
+    }
+    else
+    {
+      if (serviceRgbTestColor == 1) rgbRed();
+      else if (serviceRgbTestColor == 2) rgbGreen();
+      else if (serviceRgbTestColor == 3) rgbBlue();
+      else rgbOff();
