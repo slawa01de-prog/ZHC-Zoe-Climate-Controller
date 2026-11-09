@@ -1,0 +1,800 @@
+  bool ok =
+    WiFi.softAP(
+      ZHC_AP_SSID,
+      apPassword.c_str()
+    );
+
+  if (!ok)
+  {
+    Serial.println("WLAN Start fehlgeschlagen.");
+    WiFi.mode(WIFI_OFF);
+    return false;
+  }
+
+  configureWebServer();
+  webServer.begin();
+
+  wifiEnabled = true;
+  webServerRunning = true;
+
+  Serial.println();
+  Serial.println("WLAN gestartet.");
+  Serial.println("SSID: ZHC");
+  Serial.print("AP-Passwort: ");
+  Serial.println(apPassword);
+  Serial.print("IP: ");
+  Serial.println(WiFi.softAPIP());
+  Serial.println("Web: http://192.168.4.1");
+
+  if (forcePasswordChange)
+  {
+    Serial.println();
+    Serial.println("WEB ERSTEINRICHTUNG");
+    Serial.println("Benutzer: admin");
+    Serial.print("Initialpasswort: ");
+    Serial.println(temporaryPassword);
+  }
+
+  return true;
+}
+
+void stopZHCWiFi()
+{
+  invalidateWebSession();
+
+  if (webServerRunning)
+  {
+    webServer.stop();
+    webServerRunning = false;
+  }
+
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+
+  wifiEnabled = false;
+
+  Serial.println("WLAN / Webserver / OTA AUS.");
+}
+
+void serviceWebServer()
+{
+  if (wifiEnabled && webServerRunning)
+    webServer.handleClient();
+}
+
+// =====================================================================
+// BOOT RECOVERY
+// =====================================================================
+
+void checkBootCredentialRecovery()
+{
+  if (digitalRead(PIN_BUTTON) != LOW)
+    return;
+
+  Serial.println();
+  Serial.println("Taster beim Boot erkannt.");
+  Serial.println("Fuer Web-Recovery weiter gedrueckt halten...");
+
+  uint32_t start = millis();
+
+  while (digitalRead(PIN_BUTTON) == LOW)
+  {
+    if (millis() - start >= BOOT_RECOVERY_HOLD_MS)
+    {
+      resetWebCredentials();
+
+      Serial.println("Recovery abgeschlossen.");
+      Serial.println("Taster loslassen.");
+
+      while (digitalRead(PIN_BUTTON) == LOW)
+        delay(20);
+
+      return;
+    }
+
+    delay(20);
+  }
+
+  Serial.println("Recovery nicht ausgeloest.");
+}
+
+// =====================================================================
+// CONFIG VALIDATION
+// =====================================================================
+
+bool configValid()
+{
+  if (!isfinite(cfg.targetTemp)) return false;
+
+  if (cfg.targetTemp < 15.0f || cfg.targetTemp > 28.0f) return false;
+  if (cfg.deadBand < 0.10f || cfg.deadBand > 2.0f) return false;
+  if (cfg.restartDelta < cfg.deadBand || cfg.restartDelta > 5.0f) return false;
+
+  if (cfg.weightLow < 0.0f || cfg.weightHigh < 0.0f) return false;
+  if ((cfg.weightLow + cfg.weightHigh) <= 0.0f) return false;
+
+  if (cfg.kp < 0.0f || cfg.kp > 100.0f) return false;
+  if (cfg.ki < 0.0f || cfg.ki > 10.0f) return false;
+  if (cfg.trendGain < 0.0f || cfg.trendGain > 100.0f) return false;
+
+  if (cfg.stage1Threshold < 0.0f) return false;
+  if (cfg.stage2Threshold <= cfg.stage1Threshold) return false;
+  if (cfg.stage3Threshold <= cfg.stage2Threshold) return false;
+  if (cfg.stage3Threshold > 100.0f) return false;
+
+  if (cfg.emergencyMaxTemp <= cfg.targetTemp) return false;
+  if (cfg.sensorTimeoutSec < 2 || cfg.sensorTimeoutSec > 120) return false;
+
+  if (cfg.safetyMaxDifference < 0.5f || cfg.safetyMaxDifference > 15.0f) return false;
+  if (cfg.safetyDifferenceDelaySec < 5 || cfg.safetyDifferenceDelaySec > 600) return false;
+
+  return true;
+}
+
+// =====================================================================
+// SENSOR DISCOVERY
+// =====================================================================
+
+void scanSensors()
+{
+  discoveredSensorCount = 0;
+
+  uint8_t count = sensors.getDeviceCount();
+  if (count > MAX_DISCOVERED_SENSORS)
+    count = MAX_DISCOVERED_SENSORS;
+
+  for (uint8_t i = 0; i < count; i++)
+  {
+    DeviceAddress adr;
+
+    if (sensors.getAddress(adr, i))
+    {
+      memcpy(discoveredSensors[discoveredSensorCount], adr, 8);
+      discoveredSensorCount++;
+    }
+  }
+
+  // present Flags aktualisieren
+  SensorRole* roles[] = { &sensorLow, &sensorHigh, &sensorOutside, &sensorSafety };
+
+  for (SensorRole* role : roles)
+  {
+    role->present = false;
+
+    if (!role->assigned)
+      continue;
+
+    for (uint8_t i = 0; i < discoveredSensorCount; i++)
+    {
+      if (addressEqual(role->address, discoveredSensors[i]))
+      {
+        role->present = true;
+        break;
+      }
+    }
+  }
+}
+
+int findSensorIndexByAddress(const DeviceAddress address)
+{
+  for (uint8_t i = 0; i < discoveredSensorCount; i++)
+  {
+    if (addressEqual(address, discoveredSensors[i]))
+      return i;
+  }
+
+  return -1;
+}
+
+bool indexAlreadyAssignedToOtherRole(int index, SensorRoleId targetRole)
+{
+  if (index < 0 || index >= discoveredSensorCount)
+    return false;
+
+  for (int r = ROLE_LOW; r <= ROLE_SAFETY; r++)
+  {
+    if (r == targetRole)
+      continue;
+
+    SensorRole* role = getRole((SensorRoleId)r);
+
+    if (role && role->assigned &&
+        addressEqual(role->address, discoveredSensors[index]))
+    {
+      Serial.print("Sensor [");
+      Serial.print(index);
+      Serial.print("] ist bereits ");
+      Serial.print(roleName((SensorRoleId)r));
+      Serial.println(" zugeordnet.");
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool assignSensor(SensorRoleId targetRole, int index)
+{
+  scanSensors();
+
+  if (index < 0 || index >= discoveredSensorCount)
+  {
+    Serial.println("Ungueltiger Sensorindex.");
+    return false;
+  }
+
+  if (indexAlreadyAssignedToOtherRole(index, targetRole))
+  {
+    Serial.println("Zuweisung nicht geaendert.");
+    return false;
+  }
+
+  SensorRole* role = getRole(targetRole);
+  if (!role) return false;
+
+  memcpy(role->address, discoveredSensors[index], 8);
+  role->assigned = true;
+  role->present = true;
+  role->valid = false;
+
+  Serial.print(roleName(targetRole));
+  Serial.print(" <- Sensor [");
+  Serial.print(index);
+  Serial.print("] ");
+  Serial.println(addressToString(role->address));
+
+  return true;
+}
+
+void unassignSensor(SensorRoleId roleId)
+{
+  SensorRole* role = getRole(roleId);
+  if (!role) return;
+
+  role->assigned = false;
+  role->present = false;
+  role->valid = false;
+  role->temperature = NAN;
+  role->lastValidMillis = 0;
+
+  memset(role->address, 0, 8);
+
+  if (roleId == ROLE_SAFETY)
+    safetyDifferenceStartMillis = 0;
+
+  Serial.print(roleName(roleId));
+  Serial.println(" = NICHT ZUGEWIESEN / DEAKTIVIERT");
+}
+
+// =====================================================================
+// SENSOR STATUS / SETUP
+// =====================================================================
+
+void printSensorScan()
+{
+  scanSensors();
+
+  Serial.println();
+  Serial.println("============== SENSOR SCAN ====================");
+
+  Serial.print("Gefundene DS18B20: ");
+  Serial.println(discoveredSensorCount);
+
+  for (uint8_t i = 0; i < discoveredSensorCount; i++)
+  {
+    Serial.print("[");
+    Serial.print(i);
+    Serial.print("] ");
+    Serial.print(addressToString(discoveredSensors[i]));
+
+    // Zuordnung anzeigen
+    String assigned = "FREI";
+
+    if (sensorLow.assigned && addressEqual(sensorLow.address, discoveredSensors[i]))
+      assigned = "CABIN_LOW";
+    else if (sensorHigh.assigned && addressEqual(sensorHigh.address, discoveredSensors[i]))
+      assigned = "CABIN_HIGH";
+    else if (sensorOutside.assigned && addressEqual(sensorOutside.address, discoveredSensors[i]))
+      assigned = "OUTSIDE";
+    else if (sensorSafety.assigned && addressEqual(sensorSafety.address, discoveredSensors[i]))
+      assigned = "SAFETY";
+
+    Serial.print("   -> ");
+    Serial.println(assigned);
+  }
+
+  Serial.println("================================================");
+}
+
+void printRoleLine(const char* label, SensorRole &role)
+{
+  Serial.print(label);
+  Serial.print(" : ");
+
+  if (!role.assigned)
+  {
+    Serial.println("NICHT ZUGEWIESEN / DEAKTIVIERT");
+    return;
+  }
+
+  int idx = findSensorIndexByAddress(role.address);
+
+  Serial.print("[");
+  if (idx >= 0) Serial.print(idx);
+  else Serial.print("-");
+  Serial.print("] ");
+
+  Serial.print(addressToString(role.address));
+  Serial.print("  ");
+
+  if (!role.present)
+  {
+    Serial.println("NICHT GEFUNDEN");
+    return;
+  }
+
+  if (!role.valid)
+  {
+    Serial.println("INVALID");
+    return;
+  }
+
+  Serial.print(role.temperature, 2);
+  Serial.println(" C");
+}
+
+void printSensorStatus()
+{
+  scanSensors();
+
+  Serial.println();
+  Serial.println("============== SENSOR STATUS ==================");
+
+  printRoleLine("CABIN_LOW ", sensorLow);
+  printRoleLine("CABIN_HIGH", sensorHigh);
+  printRoleLine("OUTSIDE   ", sensorOutside);
+  printRoleLine("SAFETY    ", sensorSafety);
+
+  Serial.println();
+
+  Serial.print("Weight LOW         : ");
+  Serial.print(cfg.weightLow, 1);
+  Serial.println(" %");
+
+  Serial.print("Weight HIGH        : ");
+  Serial.print(cfg.weightHigh, 1);
+  Serial.println(" %");
+
+  Serial.print("Virtual Cabin      : ");
+  if (isfinite(controlTemp))
+  {
+    Serial.print(controlTemp, 2);
+    Serial.println(" C");
+  }
+  else
+  {
+    Serial.println("---");
+  }
+
+  Serial.print("Stratification     : ");
+  if (isfinite(stratification))
+  {
+    Serial.print(stratification, 2);
+    Serial.println(" K");
+  }
+  else
+  {
+    Serial.println("---");
+  }
+
+  Serial.println("================================================");
+}
+
+void printSensorSetup()
+{
+  printSensorScan();
+
+  Serial.println();
+  Serial.println("============== SENSOR SETUP ===================");
+
+  printRoleLine("CABIN_LOW ", sensorLow);
+  printRoleLine("CABIN_HIGH", sensorHigh);
+  printRoleLine("OUTSIDE   ", sensorOutside);
+  printRoleLine("SAFETY    ", sensorSafety);
+
+  Serial.println();
+  Serial.println("Zuordnung:");
+  Serial.println(" assign low INDEX");
+  Serial.println(" assign low none");
+  Serial.println(" assign high INDEX");
+  Serial.println(" assign high none");
+  Serial.println(" assign outside INDEX");
+  Serial.println(" assign outside none");
+  Serial.println(" assign safety INDEX");
+  Serial.println(" assign safety none");
+  Serial.println();
+  Serial.println("Nicht zugewiesen = automatisch deaktiviert.");
+  Serial.println("================================================");
+}
+
+// =====================================================================
+// SENSOR READ
+// =====================================================================
+
+void readOneSensor(SensorRole &role)
+{
+  role.valid = false;
+
+  if (!role.assigned || !role.present)
+    return;
+
+  float t = sensors.getTempC(role.address);
+
+  if (t == DEVICE_DISCONNECTED_C || !isfinite(t))
+    return;
+
+  t += role.offset;
+
+  role.temperature = t;
+  role.valid = true;
+  role.lastValidMillis = millis();
+}
+
+void calculateControlTemperature()
+{
+  bool lowOK = sensorLow.assigned && sensorLow.valid;
+  bool highOK = sensorHigh.assigned && sensorHigh.valid;
+
+  stratification = NAN;
+
+  if (lowOK && highOK)
+  {
+    float sumWeights = cfg.weightLow + cfg.weightHigh;
+
+    controlTemp =
+      (
+        sensorLow.temperature * cfg.weightLow +
+        sensorHigh.temperature * cfg.weightHigh
+      ) / sumWeights;
+
+    stratification =
+      sensorHigh.temperature -
+      sensorLow.temperature;
+  }
+  else if (lowOK)
+  {
+    controlTemp = sensorLow.temperature;
+  }
+  else if (highOK)
+  {
+    controlTemp = sensorHigh.temperature;
+  }
+  else
+  {
+    controlTemp = NAN;
+  }
+}
+
+bool anyCabinRoleAssigned()
+{
+  return sensorLow.assigned || sensorHigh.assigned;
+}
+
+bool anyCabinSensorValid()
+{
+  return (sensorLow.assigned && sensorLow.valid) ||
+         (sensorHigh.assigned && sensorHigh.valid);
+}
+
+void updateWarnings()
+{
+  activeWarning = WARNING_NONE;
+
+  if (sensorOutside.assigned && !sensorOutside.present)
+  {
+    activeWarning = WARNING_OUTSIDE_MISSING;
+    return;
+  }
+
+  // Wenn beide Innenraumsensoren zugewiesen sind, aber nur einer funktioniert:
+  if (sensorLow.assigned && sensorHigh.assigned)
+  {
+    bool lowOK = sensorLow.valid;
+    bool highOK = sensorHigh.valid;
+
+    if (lowOK != highOK)
+    {
+      activeWarning = WARNING_ONE_CABIN_SENSOR_MISSING;
+      return;
+    }
+  }
+}
+
+void readSensors()
+{
+  uint32_t now = millis();
+
+  if (now - lastSensorCycleMillis < SENSOR_INTERVAL_MS)
+    return;
+
+  float dtMinutes = 0.0f;
+
+  if (lastSensorCycleMillis > 0)
+  {
+    dtMinutes = (now - lastSensorCycleMillis) / 60000.0f;
+  }
+
+  lastSensorCycleMillis = now;
+
+  scanSensors();
+
+  sensors.requestTemperatures();
+
+  previousControlTemp = controlTemp;
+
+  readOneSensor(sensorLow);
+  readOneSensor(sensorHigh);
+  readOneSensor(sensorOutside);
+  readOneSensor(sensorSafety);
+
+  calculateControlTemperature();
+  updateWarnings();
+
+  // -----------------------------------------------------------
+  // Es muss mindestens LOW oder HIGH zugewiesen sein
+  // -----------------------------------------------------------
+
+  if (!anyCabinRoleAssigned())
+  {
+    // Nach Flash / Erstinbetriebnahme ist das KEIN verriegelter Fehler.
+    // Der Controller bleibt sicher im OEM-/Setup-Zustand und das Terminal
+    // bleibt voll bedienbar.
+    activeWarning = WARNING_SETUP_REQUIRED;
+
+    requestedStage = 0;
+    activeStage = 0;
+    controllerOutput = 0.0f;
+    forceOutputsOff();
+
+    // Nur falls waehrend einer aktiven Eigenregelung die Zuordnung
+    // verschwindet, wird daraus ein echter Safety-Lock.
+    if (currentMode == MODE_AUTO ||
+        currentMode == MODE_BOOST ||
+        currentMode == MODE_MANUAL)
+    {
+      enterFailsafe(FAULT_NO_CABIN_SENSOR);
+    }
+
+    return;
+  }
+
+  // -----------------------------------------------------------
+  // Wenn keiner der zugewiesenen Innenraumsensoren gueltig ist:
+  // Timeout abwarten, dann FAILSAFE
+  // -----------------------------------------------------------
+
+  if (!anyCabinSensorValid())
+  {
+    uint32_t newestLastValid = max(sensorLow.lastValidMillis, sensorHigh.lastValidMillis);
+
+    requestedStage = 0;
+    activeStage = 0;
+    controllerOutput = 0.0f;
+    forceOutputsOff();
+
+    // Im OEM-/Setup-Zustand nur Diagnosehinweis.
+    // Erst waehrend AUTO/BOOST/MANUAL wird ein Sensorverlust zum FAILSAFE.
+    if ((currentMode == MODE_AUTO ||
+         currentMode == MODE_BOOST ||
+         currentMode == MODE_MANUAL) &&
+        now - newestLastValid > cfg.sensorTimeoutSec * 1000UL)
+    {
+      enterFailsafe(FAULT_CABIN_TIMEOUT);
+    }
+    else
+    {
+      activeWarning = WARNING_SETUP_REQUIRED;
+    }
+
+    return;
+  }
+
+  // -----------------------------------------------------------
+  // Plausibilitaet
+  // -----------------------------------------------------------
+
+  if (!isfinite(controlTemp) ||
+      controlTemp < cfg.minValidCabinTemp ||
+      controlTemp > cfg.maxValidCabinTemp)
+  {
+    enterFailsafe(FAULT_CABIN_IMPLAUSIBLE);
+    return;
+  }
+
+  // -----------------------------------------------------------
+  // Sprung der virtuellen Innenraumtemperatur
+  // -----------------------------------------------------------
+
+  if (isfinite(previousControlTemp))
+  {
+    float jump = fabs(controlTemp - previousControlTemp);
+
+    if (jump > cfg.maxTempJump)
+    {
+      enterFailsafe(FAULT_TEMP_JUMP);
+      return;
+    }
+  }
+
+  // -----------------------------------------------------------
+  // Trend
+  // -----------------------------------------------------------
+
+  if (isfinite(previousControlTemp) && dtMinutes > 0.0f)
+  {
+    float rawTrend =
+      (controlTemp - previousControlTemp) / dtMinutes;
+
+    tempTrendPerMinute =
+      0.90f * tempTrendPerMinute +
+      0.10f * rawTrend;
+  }
+
+  // -----------------------------------------------------------
+  // Uebertemperatur:
+  // Jede vorhandene Innenraumzone wird geprueft
+  // -----------------------------------------------------------
+
+  if ((sensorLow.valid  && sensorLow.temperature  >= cfg.emergencyMaxTemp) ||
+      (sensorHigh.valid && sensorHigh.temperature >= cfg.emergencyMaxTemp) ||
+      controlTemp >= cfg.emergencyMaxTemp)
+  {
+    enterFailsafe(FAULT_OVERTEMP);
+    return;
+  }
+
+  // -----------------------------------------------------------
+  // SAFETY:
+  // Nur wenn explizit zugewiesen.
+  // Referenz ist virtuelle Innenraumtemperatur.
+  // -----------------------------------------------------------
+
+  if (sensorSafety.assigned)
+  {
+    if (!sensorSafety.present || !sensorSafety.valid)
+    {
+      if (now - sensorSafety.lastValidMillis >
+          cfg.sensorTimeoutSec * 1000UL)
+      {
+        enterFailsafe(FAULT_SAFETY_SENSOR);
+        return;
+      }
+    }
+    else
+    {
+      float diff =
+        fabs(sensorSafety.temperature - controlTemp);
+
+      if (diff > cfg.safetyMaxDifference)
+      {
+        if (safetyDifferenceStartMillis == 0)
+          safetyDifferenceStartMillis = now;
+
+        if (now - safetyDifferenceStartMillis >=
+            cfg.safetyDifferenceDelaySec * 1000UL)
+        {
+          enterFailsafe(FAULT_SAFETY_DIFFERENCE);
+          return;
+        }
+      }
+      else
+      {
+        safetyDifferenceStartMillis = 0;
+      }
+    }
+  }
+  else
+  {
+    safetyDifferenceStartMillis = 0;
+  }
+}
+
+// =====================================================================
+// FAULT HISTORY / PERSISTENCE
+// =====================================================================
+
+void addFaultHistory(FaultCode code)
+{
+  FaultRecord &f = faultHistory[faultHistoryIndex];
+
+  f.code = code;
+  f.timestamp = millis();
+  f.lowTemp = sensorLow.temperature;
+  f.highTemp = sensorHigh.temperature;
+  f.outsideTemp = sensorOutside.temperature;
+  f.safetyTemp = sensorSafety.temperature;
+  f.controlTemp = controlTemp;
+  f.stage = activeStage;
+
+  faultHistoryIndex++;
+
+  if (faultHistoryIndex >= FAULT_HISTORY_SIZE)
+    faultHistoryIndex = 0;
+
+  if (faultHistoryCount < FAULT_HISTORY_SIZE)
+    faultHistoryCount++;
+}
+
+void saveLastFault(FaultCode code)
+{
+  preferences.begin("zoefault", false);
+
+  preferences.putUInt("code", (uint32_t)code);
+  preferences.putFloat("low", sensorLow.temperature);
+  preferences.putFloat("high", sensorHigh.temperature);
+  preferences.putFloat("out", sensorOutside.temperature);
+  preferences.putFloat("safe", sensorSafety.temperature);
+  preferences.putFloat("ctrl", controlTemp);
+  preferences.putUInt("stage", activeStage);
+  preferences.putUInt("uptime", millis() / 1000UL);
+
+  preferences.end();
+}
+
+void enterFailsafe(FaultCode code)
+{
+  if (faultLatched)
+    return;
+
+  addFaultHistory(code);
+  saveLastFault(code);
+
+  activeFault = code;
+  faultLatched = true;
+  faultUnread = true;
+  currentMode = MODE_FAILSAFE;
+
+  requestedStage = 0;
+  activeStage = 0;
+
+  controllerOutput = 0.0f;
+  proportionalTerm = 0.0f;
+  integralTerm = 0.0f;
+  trendCorrection = 0.0f;
+  stratificationCorrection = 0.0f;
+
+  forceOutputsOff();
+
+  // Absichtlich nur eine kurze Meldung.
+  // Das Terminal und alle Setup-/Diagnosebefehle bleiben bedienbar.
+  Serial.println();
+  Serial.println("[SAFETY] Eigene Heizfreigabe wurde gesperrt.");
+  Serial.println("[SAFETY] Menue bleibt aktiv. Befehl: analyse");
+}
+
+// =====================================================================
+// SETTINGS LOAD/SAVE
+// =====================================================================
+
+void saveRole(Preferences &p, const char* key, SensorRole &role)
+{
+  if (role.assigned)
+    p.putString(key, addressToString(role.address));
+  else
+    p.remove(key);
+}
+
+void loadRole(Preferences &p, const char* key, SensorRole &role)
+{
+  String text = p.getString(key, "");
+
+  role.assigned = false;
+
+  if (text.length() == 16 &&
+      stringToAddress(text, role.address))
+  {
+    role.assigned = true;
+  }
+}
+
+void saveSettings()
