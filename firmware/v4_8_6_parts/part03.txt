@@ -1,0 +1,799 @@
+    Settings oldCfg = cfg;
+
+    cfg.learningEnabled = webServer.hasArg("enabled");
+    cfg.learningRate = webServer.arg("rate").toFloat();
+    cfg.learningMinTimeSec = (uint32_t)webServer.arg("time").toInt();
+
+    if (!configValid())
+    {
+      cfg = oldCfg;
+      webServer.send(400, "text/plain; charset=utf-8", "Ungueltige Lernparameter.");
+      return;
+    }
+
+    if (webServer.hasArg("reset"))
+      model = ThermalModel();
+
+    saveSettings();
+    webServer.sendHeader("Location", "/learning");
+    webServer.send(303, "text/plain", "");
+    return;
+  }
+
+  String html = pageHeader("Lernsystem");
+  html += F("<div class='card'><h2>Lernsystem</h2><form method='post' action='/learning'>");
+  html += "<label><input style='width:auto' type='checkbox' name='enabled' value='1'";
+  if (cfg.learningEnabled) html += " checked";
+  html += "> Lernsystem aktiv</label><br><br>";
+  html += "<label>Lernrate</label><input name='rate' type='number' step='0.01' value='" + String(cfg.learningRate, 3) + "'>";
+  html += "<label>Mindest-Lernzeit [s]</label><input name='time' type='number' value='" + String(cfg.learningMinTimeSec) + "'>";
+  html += F("<button type='submit'>Speichern</button>"
+            "<button class='danger' type='submit' name='reset' value='1'>Lernwerte zuruecksetzen</button></form></div>");
+
+  html += F("<div class='card'><h2>Gelernte Werte</h2><table>");
+  html += "<tr><td>Gain Stufe 1</td><td>" + String(model.gainStage1, 4) + "</td></tr>";
+  html += "<tr><td>Gain Stufe 2</td><td>" + String(model.gainStage2, 4) + "</td></tr>";
+  html += "<tr><td>Gain Stufe 3</td><td>" + String(model.gainStage3, 4) + "</td></tr>";
+  html += "<tr><td>Coast</td><td>" + String(model.coastTemp, 3) + "</td></tr>";
+  html += F("</table></div>");
+
+  html += pageFooter();
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleDiagnosticsPage()
+{
+  if (!requireAuthentication())
+    return;
+
+  if (webServer.method() == HTTP_POST)
+  {
+    if (webServer.hasArg("resetfault"))
+      resetFault();
+
+    webServer.sendHeader("Location", "/diagnostics");
+    webServer.send(303, "text/plain", "");
+    return;
+  }
+
+  String html = pageHeader("Diagnose");
+  html += F("<div class='card'><h2>Diagnose</h2><table>");
+  html += "<tr><td>Safety-Lock</td><td>" + String(faultLatched ? "AKTIV" : "AUS") + "</td></tr>";
+  html += "<tr><td>Fehler</td><td>" + String(faultName(activeFault)) + "</td></tr>";
+  html += "<tr><td>Warnung</td><td>" + String(warningName(activeWarning)) + "</td></tr>";
+  html += "<tr><td>Reglerausgang</td><td>" + String(controllerOutput, 1) + " %</td></tr>";
+  html += "<tr><td>Angeforderte Stufe</td><td>" + String(requestedStage) + "</td></tr>";
+  html += "<tr><td>Aktive Stufe</td><td>" + String(activeStage) + "</td></tr>";
+  html += F("</table></div>");
+
+  html += F("<div class='card'><h2>Fehlerquittierung</h2>"
+            "<form method='post' action='/diagnostics'>"
+            "<button class='danger' name='resetfault' value='1' type='submit'>Safety-Lock pruefen / Fehler zuruecksetzen</button>"
+            "</form><p class='small'>Reset erfolgt nur, wenn die bestehenden Safety-Bedingungen wieder gueltig sind.</p></div>");
+
+  html += F("<div class='card'><h2>Service</h2>"
+            "<p>Einzeltests fuer H1/H2/H3, RGB-LED, Taster und Sensorbus.</p>"
+            "<a class='btn' href='/service'>Service-Diagnose oeffnen</a></div>");
+
+  html += pageFooter();
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+
+void startServiceRgbTest(uint8_t color)
+{
+  serviceRgbTestColor = color;
+  serviceRgbTestActive = (color >= 1 && color <= 3);
+  serviceRgbUntilMillis = millis() + SERVICE_RGB_TEST_MS;
+
+  if (color == 1) rgbRed();
+  else if (color == 2) rgbGreen();
+  else if (color == 3) rgbBlue();
+  else
+  {
+    serviceRgbTestActive = false;
+    serviceRgbTestColor = 0;
+    rgbOff();
+  }
+}
+
+String jsonBool(bool value)
+{
+  return value ? "true" : "false";
+}
+
+void handleServiceStatusJson()
+{
+  if (!requireAuthentication())
+    return;
+
+  serviceBenchTests();
+
+  String json = "{";
+  json += "\"h1\":" + jsonBool(digitalRead(HEATER1_OUT) == HIGH) + ",";
+  json += "\"h2\":" + jsonBool(digitalRead(HEATER2_OUT) == HIGH) + ",";
+  json += "\"h3\":" + jsonBool(digitalRead(HEATER3_OUT) == HIGH) + ",";
+  json += "\"testActive\":" + jsonBool(serviceOutputTestActive) + ",";
+  json += "\"mask\":" + String(serviceOutputMask) + ",";
+  json += "\"remainingMs\":" + String(serviceOutputRemainingMs()) + ",";
+  json += "\"buttonPressed\":" + jsonBool(digitalRead(PIN_BUTTON) == LOW) + ",";
+  json += "\"sensorCount\":" + String(discoveredSensorCount) + ",";
+  json += "\"mode\":\"" + String(modeName()) + "\",";
+  json += "\"faultLatched\":" + jsonBool(faultLatched) + ",";
+  json += "\"fault\":\"" + htmlEscape(String(faultName(activeFault))) + "\",";
+  json += "\"output\":" + String(controllerOutput, 1) + ",";
+  json += "\"wifi\":" + jsonBool(wifiEnabled) + ",";
+  json += "\"ip\":\"" + WiFi.softAPIP().toString() + "\"";
+  json += "}";
+
+  webServer.sendHeader("Cache-Control", "no-store");
+  webServer.send(200, "application/json; charset=utf-8", json);
+}
+
+void handleServiceAction()
+{
+  if (!requireAuthentication())
+    return;
+
+  String action = webServer.arg("action");
+  uint32_t durationSec = (uint32_t)webServer.arg("duration").toInt();
+
+  bool okay = true;
+  String message = "OK";
+
+  if (action == "h1")
+  {
+    okay = startServiceOutputTest(0x01, durationSec);
+    message = okay ? "H1-Test gestartet." : "H1-Test gesperrt oder Dauer ungueltig.";
+  }
+  else if (action == "h2")
+  {
+    okay = startServiceOutputTest(0x02, durationSec);
+    message = okay ? "H2-Test gestartet." : "H2-Test gesperrt oder Dauer ungueltig.";
+  }
+  else if (action == "h3")
+  {
+    okay = startServiceOutputTest(0x04, durationSec);
+    message = okay ? "H3-Test gestartet." : "H3-Test gesperrt oder Dauer ungueltig.";
+  }
+  else if (action == "outputs_off")
+  {
+    stopServiceOutputTest();
+    message = "H1/H2/H3 AUS.";
+  }
+  else if (action == "rgb_r")
+  {
+    startServiceRgbTest(1);
+    message = "RGB Rot.";
+  }
+  else if (action == "rgb_g")
+  {
+    startServiceRgbTest(2);
+    message = "RGB Gruen.";
+  }
+  else if (action == "rgb_b")
+  {
+    startServiceRgbTest(3);
+    message = "RGB Blau.";
+  }
+  else if (action == "rgb_off")
+  {
+    serviceRgbTestActive = false;
+    serviceRgbTestColor = 0;
+    rgbOff();
+    message = "RGB AUS.";
+  }
+  else if (action == "scan")
+  {
+    scanSensors();
+    message = "1-Wire neu gescannt.";
+  }
+  else
+  {
+    okay = false;
+    message = "Unbekannte Service-Aktion.";
+  }
+
+  Serial.print("[SERVICE] ");
+  Serial.println(message);
+
+  String json = "{";
+  json += "\"ok\":" + jsonBool(okay) + ",";
+  json += "\"message\":\"" + htmlEscape(message) + "\"";
+  json += "}";
+
+  webServer.sendHeader("Cache-Control", "no-store");
+  webServer.send(okay ? 200 : 400, "application/json; charset=utf-8", json);
+}
+
+void handleServicePage()
+{
+  if (!requireAuthentication())
+    return;
+
+  scanSensors();
+
+  String html = pageHeader("Service-Diagnose");
+
+  html += F("<div class='card'><h2>Service-Diagnose</h2>"
+            "<p><b>Nur 3,3-V-/Niedervolt-Bench-Test.</b> Keine direkte Verbindung zu HV/PTC-Leistungspfaden.</p>"
+            "<p>Die Seite bleibt stehen. Status und Countdown werden im Hintergrund aktualisiert.</p></div>");
+
+  html += F("<div class='card'><h2>H1 / H2 / H3 einzeln testen</h2>"
+            "<p>Testdauer: "
+            "<select id='duration' style='width:auto;display:inline-block'>"
+            "<option value='5'>5 s</option>"
+            "<option value='10'>10 s</option>"
+            "<option value='30' selected>30 s</option>"
+            "<option value='60'>60 s</option>"
+            "</select></p>"
+            "<table><tr><th>Kanal</th><th>GPIO</th><th>Pegel</th><th>Aktion</th></tr>"
+            "<tr><td>H1</td><td>GPIO8</td><td id='h1'>---</td><td><button type='button' onclick=\"serviceAction('h1')\">H1 testen</button></td></tr>"
+            "<tr><td>H2</td><td>GPIO9</td><td id='h2'>---</td><td><button type='button' onclick=\"serviceAction('h2')\">H2 testen</button></td></tr>"
+            "<tr><td>H3</td><td>GPIO10</td><td id='h3'>---</td><td><button type='button' onclick=\"serviceAction('h3')\">H3 testen</button></td></tr>"
+            "</table>"
+            "<button type='button' class='danger' style='width:100%;font-size:20px;padding:16px' onclick=\"serviceAction('outputs_off')\">STOP / ALLE AUS</button>"
+            "<div class='tile' style='margin-top:12px'>"
+            "<b>Aktiver Test:</b> <span id='activeTest'>---</span><br>"
+            "<b>Restzeit:</b> <span id='remaining'>0.0 s</span>"
+            "</div>"
+            "<p id='serviceMessage' class='small'></p>"
+            "</div>");
+
+  html += F("<div class='card'><h2>RGB-LED testen</h2>"
+            "<button type='button' onclick=\"serviceAction('rgb_r')\">Rot 3 s</button>"
+            "<button type='button' onclick=\"serviceAction('rgb_g')\">Gruen 3 s</button>"
+            "<button type='button' onclick=\"serviceAction('rgb_b')\">Blau 3 s</button>"
+            "<button type='button' class='secondary' onclick=\"serviceAction('rgb_off')\">LED AUS</button>"
+            "</div>");
+
+  html += F("<div class='card'><h2>Taster</h2>"
+            "<table><tr><td>GPIO3</td><td id='buttonState'>---</td></tr></table>"
+            "<p class='small'>INPUT_PULLUP, aktiv LOW.</p></div>");
+
+  html += F("<div class='card'><h2>DS18B20 / 1-Wire</h2>");
+  html += "<p>Gefundene Sensoren: <b id='sensorCount'>" + String(discoveredSensorCount) + "</b></p>";
+  html += F("<table><tr><th>Index</th><th>ROM-Adresse</th></tr>");
+
+  for (uint8_t i = 0; i < discoveredSensorCount; i++)
+  {
+    html += "<tr><td>" + String(i) + "</td><td>" +
+            addressToString(discoveredSensors[i]) + "</td></tr>";
+  }
+
+  html += F("</table>"
+            "<button type='button' onclick=\"serviceAction('scan')\">1-Wire neu scannen</button>"
+            "<p class='small'>Nach einem Scan die Seite einmal manuell neu laden, wenn sich die Sensorliste geaendert hat.</p>"
+            "</div>");
+
+  html += F("<div class='card'><h2>Systemstatus</h2><table>"
+            "<tr><td>Modus</td><td id='modeState'>---</td></tr>"
+            "<tr><td>Safety-Lock</td><td id='safetyState'>---</td></tr>"
+            "<tr><td>Fehler</td><td id='faultState'>---</td></tr>"
+            "<tr><td>Reglerausgang</td><td id='controllerState'>---</td></tr>"
+            "<tr><td>WLAN</td><td id='wifiState'>---</td></tr>"
+            "<tr><td>IP</td><td id='ipState'>---</td></tr>"
+            "</table></div>");
+
+  html += F(
+    "<script>"
+    "function level(v){return v?'HIGH':'LOW';}"
+    "function activeName(mask){"
+      "if(mask===1)return 'H1 / GPIO8';"
+      "if(mask===2)return 'H2 / GPIO9';"
+      "if(mask===4)return 'H3 / GPIO10';"
+      "return 'Keiner';"
+    "}"
+    "async function refreshService(){"
+      "try{"
+        "const r=await fetch('/service/status',{cache:'no-store'});"
+        "if(!r.ok)return;"
+        "const s=await r.json();"
+        "document.getElementById('h1').textContent=level(s.h1);"
+        "document.getElementById('h2').textContent=level(s.h2);"
+        "document.getElementById('h3').textContent=level(s.h3);"
+        "document.getElementById('activeTest').textContent=s.testActive?activeName(s.mask):'Keiner';"
+        "document.getElementById('remaining').textContent=(s.remainingMs/1000).toFixed(1)+' s';"
+        "document.getElementById('buttonState').textContent=s.buttonPressed?'GEDRUECKT / LOW':'FREI / HIGH';"
+        "document.getElementById('sensorCount').textContent=s.sensorCount;"
+        "document.getElementById('modeState').textContent=s.mode;"
+        "document.getElementById('safetyState').textContent=s.faultLatched?'AKTIV':'AUS';"
+        "document.getElementById('faultState').textContent=s.fault;"
+        "document.getElementById('controllerState').textContent=s.output.toFixed(1)+' %';"
+        "document.getElementById('wifiState').textContent=s.wifi?'AKTIV':'AUS';"
+        "document.getElementById('ipState').textContent=s.ip;"
+      "}catch(e){}"
+    "}"
+    "async function serviceAction(action){"
+      "let body='action='+encodeURIComponent(action);"
+      "if(action==='h1'||action==='h2'||action==='h3'){"
+        "body+='&duration='+encodeURIComponent(document.getElementById('duration').value);"
+      "}"
+      "try{"
+        "const r=await fetch('/service/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body});"
+        "const d=await r.json();"
+        "const m=document.getElementById('serviceMessage');"
+        "m.textContent=d.message||'';"
+        "m.className=d.ok?'small ok':'small err';"
+        "await refreshService();"
+      "}catch(e){"
+        "document.getElementById('serviceMessage').textContent='Kommunikationsfehler.';"
+      "}"
+    "}"
+    "refreshService();"
+    "setInterval(refreshService,1000);"
+    "</script>"
+  );
+
+  html += pageFooter();
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+String makeConfigBackup()
+{
+  String b;
+  b.reserve(1800);
+  b += "ZHC_CONFIG_V1\n";
+  b += "firmware=" + String(FW_VERSION) + "\n";
+  b += "target=" + String(cfg.targetTemp, 4) + "\n";
+  b += "deadband=" + String(cfg.deadBand, 4) + "\n";
+  b += "restart=" + String(cfg.restartDelta, 4) + "\n";
+  b += "wLow=" + String(cfg.weightLow, 4) + "\n";
+  b += "wHigh=" + String(cfg.weightHigh, 4) + "\n";
+  b += "kp=" + String(cfg.kp, 4) + "\n";
+  b += "ki=" + String(cfg.ki, 4) + "\n";
+  b += "trend=" + String(cfg.trendGain, 4) + "\n";
+  b += "st1=" + String(cfg.stage1Threshold, 4) + "\n";
+  b += "st2=" + String(cfg.stage2Threshold, 4) + "\n";
+  b += "st3=" + String(cfg.stage3Threshold, 4) + "\n";
+  b += "mintime=" + String(cfg.minStageTimeSec) + "\n";
+  b += "delay=" + String(cfg.stageDelaySec) + "\n";
+  b += "boost=" + String(cfg.boostTimeSec) + "\n";
+  b += "learning=" + String(cfg.learningEnabled ? 1 : 0) + "\n";
+  b += "learnrate=" + String(cfg.learningRate, 5) + "\n";
+  b += "learntime=" + String(cfg.learningMinTimeSec) + "\n";
+  b += "gain1=" + String(model.gainStage1, 5) + "\n";
+  b += "gain2=" + String(model.gainStage2, 5) + "\n";
+  b += "gain3=" + String(model.gainStage3, 5) + "\n";
+  b += "coast=" + String(model.coastTemp, 5) + "\n";
+  b += "emergency=" + String(cfg.emergencyMaxTemp, 4) + "\n";
+  b += "sensTO=" + String(cfg.sensorTimeoutSec) + "\n";
+  b += "tempjump=" + String(cfg.maxTempJump, 4) + "\n";
+  b += "safeDiff=" + String(cfg.safetyMaxDifference, 4) + "\n";
+  b += "safeDelay=" + String(cfg.safetyDifferenceDelaySec) + "\n";
+  b += "lowAdr=" + String(sensorLow.assigned ? addressToString(sensorLow.address) : "NONE") + "\n";
+  b += "highAdr=" + String(sensorHigh.assigned ? addressToString(sensorHigh.address) : "NONE") + "\n";
+  b += "outAdr=" + String(sensorOutside.assigned ? addressToString(sensorOutside.address) : "NONE") + "\n";
+  b += "safeAdr=" + String(sensorSafety.assigned ? addressToString(sensorSafety.address) : "NONE") + "\n";
+  b += "lowOff=" + String(sensorLow.offset, 4) + "\n";
+  b += "highOff=" + String(sensorHigh.offset, 4) + "\n";
+  b += "outOff=" + String(sensorOutside.offset, 4) + "\n";
+  b += "safeOff=" + String(sensorSafety.offset, 4) + "\n";
+  return b;
+}
+
+void setRoleFromBackup(SensorRole &role, const String &value)
+{
+  if (value == "NONE")
+  {
+    role.assigned = false;
+    role.present = false;
+    role.valid = false;
+    return;
+  }
+
+  DeviceAddress a;
+  if (stringToAddress(value, a))
+  {
+    memcpy(role.address, a, 8);
+    role.assigned = true;
+    role.present = false;
+    role.valid = false;
+  }
+}
+
+bool restoreConfigBackup(String text)
+{
+  text.replace("\r", "");
+
+  if (!text.startsWith("ZHC_CONFIG_V1\n"))
+    return false;
+
+  Settings oldCfg = cfg;
+  ThermalModel oldModel = model;
+  SensorRole oldLow = sensorLow, oldHigh = sensorHigh, oldOutside = sensorOutside, oldSafety = sensorSafety;
+
+  int pos = 0;
+  while (pos < text.length())
+  {
+    int eol = text.indexOf('\n', pos);
+    if (eol < 0) eol = text.length();
+
+    String line = text.substring(pos, eol);
+    pos = eol + 1;
+
+    int eq = line.indexOf('=');
+    if (eq <= 0) continue;
+
+    String k = line.substring(0, eq);
+    String v = line.substring(eq + 1);
+    v.trim();
+
+    if (k == "target") cfg.targetTemp = v.toFloat();
+    else if (k == "deadband") cfg.deadBand = v.toFloat();
+    else if (k == "restart") cfg.restartDelta = v.toFloat();
+    else if (k == "wLow") cfg.weightLow = v.toFloat();
+    else if (k == "wHigh") cfg.weightHigh = v.toFloat();
+    else if (k == "kp") cfg.kp = v.toFloat();
+    else if (k == "ki") cfg.ki = v.toFloat();
+    else if (k == "trend") cfg.trendGain = v.toFloat();
+    else if (k == "st1") cfg.stage1Threshold = v.toFloat();
+    else if (k == "st2") cfg.stage2Threshold = v.toFloat();
+    else if (k == "st3") cfg.stage3Threshold = v.toFloat();
+    else if (k == "mintime") cfg.minStageTimeSec = (uint32_t)v.toInt();
+    else if (k == "delay") cfg.stageDelaySec = (uint32_t)v.toInt();
+    else if (k == "boost") cfg.boostTimeSec = (uint32_t)v.toInt();
+    else if (k == "learning") cfg.learningEnabled = v.toInt() != 0;
+    else if (k == "learnrate") cfg.learningRate = v.toFloat();
+    else if (k == "learntime") cfg.learningMinTimeSec = (uint32_t)v.toInt();
+    else if (k == "gain1") model.gainStage1 = v.toFloat();
+    else if (k == "gain2") model.gainStage2 = v.toFloat();
+    else if (k == "gain3") model.gainStage3 = v.toFloat();
+    else if (k == "coast") model.coastTemp = v.toFloat();
+    else if (k == "emergency") cfg.emergencyMaxTemp = v.toFloat();
+    else if (k == "sensTO") cfg.sensorTimeoutSec = (uint32_t)v.toInt();
+    else if (k == "tempjump") cfg.maxTempJump = v.toFloat();
+    else if (k == "safeDiff") cfg.safetyMaxDifference = v.toFloat();
+    else if (k == "safeDelay") cfg.safetyDifferenceDelaySec = (uint32_t)v.toInt();
+    else if (k == "lowAdr") setRoleFromBackup(sensorLow, v);
+    else if (k == "highAdr") setRoleFromBackup(sensorHigh, v);
+    else if (k == "outAdr") setRoleFromBackup(sensorOutside, v);
+    else if (k == "safeAdr") setRoleFromBackup(sensorSafety, v);
+    else if (k == "lowOff") sensorLow.offset = v.toFloat();
+    else if (k == "highOff") sensorHigh.offset = v.toFloat();
+    else if (k == "outOff") sensorOutside.offset = v.toFloat();
+    else if (k == "safeOff") sensorSafety.offset = v.toFloat();
+  }
+
+  if (!configValid())
+  {
+    cfg = oldCfg;
+    model = oldModel;
+    sensorLow = oldLow;
+    sensorHigh = oldHigh;
+    sensorOutside = oldOutside;
+    sensorSafety = oldSafety;
+    return false;
+  }
+
+  saveSettings();
+  scanSensors();
+
+  requestedStage = 0;
+  activeStage = 0;
+  integralTerm = 0.0f;
+  controllerOutput = 0.0f;
+  forceOutputsOff();
+  currentMode = MODE_OEM;
+  return true;
+}
+
+void handleBackupPage()
+{
+  if (!requireAuthentication())
+    return;
+
+  webServer.sendHeader("Content-Disposition", "attachment; filename=ZHC_config_backup.txt");
+  webServer.send(200, "text/plain; charset=utf-8", makeConfigBackup());
+}
+
+void handleRestorePage()
+{
+  if (!requireAuthentication())
+    return;
+
+  if (webServer.method() == HTTP_POST)
+  {
+    bool ok = restoreConfigBackup(webServer.arg("backup"));
+    if (!ok)
+    {
+      webServer.send(400, "text/plain; charset=utf-8", "Backup ungueltig oder Konfiguration nicht plausibel.");
+      return;
+    }
+
+    webServer.sendHeader("Location", "/system");
+    webServer.send(303, "text/plain", "");
+    return;
+  }
+
+  String html = pageHeader("Restore");
+  html += F("<div class='card'><h2>Konfiguration wiederherstellen</h2>"
+            "<p>Inhalt einer zuvor heruntergeladenen ZHC_config_backup.txt hier einfuegen.</p>"
+            "<form method='post' action='/restore'>"
+            "<textarea name='backup' placeholder='ZHC_CONFIG_V1...'></textarea>"
+            "<button class='danger' type='submit'>Backup pruefen und wiederherstellen</button>"
+            "</form><p class='small'>Nach erfolgreichem Restore bleibt das System im OEM-Modus und alle eigenen Ausgaenge sind AUS.</p></div>");
+  html += pageFooter();
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleSystemPage()
+{
+  if (!requireAuthentication())
+    return;
+
+  String html = pageHeader("System");
+
+  html += F("<div class='card'><h2>System</h2><table>");
+  html += "<tr><td>Firmware</td><td>" + String(FW_VERSION) + "</td></tr>";
+  html += "<tr><td>Build</td><td>" + String(__DATE__) + " " + String(__TIME__) + "</td></tr>";
+  html += "<tr><td>SSID</td><td>ZHC</td></tr>";
+  html += "<tr><td>WLAN</td><td>" + String(wifiEnabled ? "AKTIV" : "AUS") + "</td></tr>";
+  html += "<tr><td>IP</td><td>" + WiFi.softAPIP().toString() + "</td></tr>";
+  html += "<tr><td>Uptime</td><td>" + String(millis() / 1000UL) + " s</td></tr>";
+  html += "<tr><td>Passwortstatus</td><td>" + String(forcePasswordChange ? "ERSTEINRICHTUNG" : "GESETZT") + "</td></tr>";
+  html += F("</table></div>");
+
+  html += F("<div class='card'><h2>Administration</h2>"
+            "<p><a href='/password'>Administrator-Passwort aendern</a></p>"
+            "<p><a href='/backup'>Konfiguration herunterladen</a></p>"
+            "<p><a href='/restore'>Konfiguration wiederherstellen</a></p>"
+            "<p><a href='/update'>Firmware-Update (OTA)</a></p>"
+            "</div>");
+
+  html += pageFooter();
+
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleUpdatePage()
+{
+  if (!requireAuthentication())
+    return;
+
+  String html = pageHeader("Firmware Update");
+
+  html += F("<div class='card'><h2>Firmware Update</h2>"
+            "<p>Nur eine fuer diesen ESP32-C3 erstellte Firmware-Datei verwenden.</p>"
+            "<p>Vor dem Schreiben werden eigene Heizanforderung und H1/H2/H3 sicher abgeschaltet.</p>"
+            "<form method='POST' action='/update' enctype='multipart/form-data'>"
+            "<input type='file' name='firmware' accept='.bin'>"
+            "<button type='submit'>Update starten</button>"
+            "</form></div>");
+
+  html += pageFooter();
+
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleUpdateUpload()
+{
+  if (!isAuthenticated() || forcePasswordChange)
+  {
+    otaUploadAuthorized = false;
+    return;
+  }
+
+  otaUploadAuthorized = true;
+
+  HTTPUpload &upload = webServer.upload();
+
+  if (upload.status == UPLOAD_FILE_START)
+  {
+    otaInProgress = true;
+
+    // Vor OTA: eigene Regelung in sicheren Zustand.
+    currentMode = MODE_OEM;
+    requestedStage = 0;
+    activeStage = 0;
+    controllerOutput = 0.0f;
+    integralTerm = 0.0f;
+    stopServiceOutputTest();
+    forceOutputsOff();
+
+    Serial.println();
+    Serial.println("[OTA] Update gestartet.");
+    Serial.println("[OTA] Eigene Heizanforderung AUS / OEM.");
+
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN))
+    {
+      Update.printError(Serial);
+    }
+  }
+  else if (upload.status == UPLOAD_FILE_WRITE)
+  {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize)
+    {
+      Update.printError(Serial);
+    }
+  }
+  else if (upload.status == UPLOAD_FILE_END)
+  {
+    if (Update.end(true))
+    {
+      Serial.print("[OTA] Erfolgreich. Bytes: ");
+      Serial.println(upload.totalSize);
+    }
+    else
+    {
+      Update.printError(Serial);
+    }
+
+    otaInProgress = false;
+  }
+  else if (upload.status == UPLOAD_FILE_ABORTED)
+  {
+    Update.abort();
+    otaInProgress = false;
+    Serial.println("[OTA] Abgebrochen.");
+  }
+}
+
+void handleUpdateFinish()
+{
+  if (!otaUploadAuthorized)
+  {
+    webServer.send(401, "text/plain; charset=utf-8",
+                   "Nicht autorisiert.");
+    return;
+  }
+
+  if (Update.hasError())
+  {
+    webServer.send(500, "text/plain; charset=utf-8",
+                   "Firmware-Update fehlgeschlagen.");
+    return;
+  }
+
+  webServer.send(
+    200,
+    "text/html; charset=utf-8",
+    "<!doctype html><html><body><h2>Update erfolgreich</h2>"
+    "<p>Controller startet neu.</p></body></html>"
+  );
+
+  delay(500);
+  forceOutputsOff();
+  ESP.restart();
+}
+
+void handleLogout()
+{
+  invalidateWebSession();
+
+  webServer.sendHeader(
+    "Set-Cookie",
+    "ZHCSESSION=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/"
+  );
+
+  webServer.sendHeader("Location", "/login");
+  webServer.send(302, "text/plain", "");
+}
+
+void configureWebServer()
+{
+  const char* headerKeys[] = { "Cookie" };
+  webServer.collectHeaders(headerKeys, 1);
+
+  webServer.on("/login", HTTP_GET, handleLoginPage);
+  webServer.on("/login", HTTP_POST, handleLoginPage);
+
+  webServer.on("/password", HTTP_GET, handlePasswordPage);
+  webServer.on("/password", HTTP_POST, handlePasswordPage);
+
+  webServer.on("/", HTTP_GET, handleRootPage);
+
+  webServer.on("/control", HTTP_GET, handleControlPage);
+  webServer.on("/control", HTTP_POST, handleControlPage);
+
+  webServer.on("/sensors", HTTP_GET, handleSensorsPage);
+  webServer.on("/sensors", HTTP_POST, handleSensorsPage);
+
+  webServer.on("/regulator", HTTP_GET, handleRegulatorPage);
+  webServer.on("/regulator", HTTP_POST, handleRegulatorPage);
+
+  webServer.on("/learning", HTTP_GET, handleLearningPage);
+  webServer.on("/learning", HTTP_POST, handleLearningPage);
+
+  webServer.on("/diagnostics", HTTP_GET, handleDiagnosticsPage);
+  webServer.on("/diagnostics", HTTP_POST, handleDiagnosticsPage);
+
+  webServer.on("/service", HTTP_GET, handleServicePage);
+  webServer.on("/service/status", HTTP_GET, handleServiceStatusJson);
+  webServer.on("/service/action", HTTP_POST, handleServiceAction);
+
+  webServer.on("/system", HTTP_GET, handleSystemPage);
+  webServer.on("/backup", HTTP_GET, handleBackupPage);
+  webServer.on("/restore", HTTP_GET, handleRestorePage);
+  webServer.on("/restore", HTTP_POST, handleRestorePage);
+
+  webServer.on("/update", HTTP_GET, handleUpdatePage);
+  webServer.on(
+    "/update",
+    HTTP_POST,
+    handleUpdateFinish,
+    handleUpdateUpload
+  );
+
+  webServer.on("/logout", HTTP_GET, handleLogout);
+
+  webServer.onNotFound([]()
+  {
+    if (!isAuthenticated())
+    {
+      webServer.sendHeader("Location", "/login");
+      webServer.send(302, "text/plain", "");
+      return;
+    }
+
+    webServer.send(404, "text/plain; charset=utf-8", "Nicht gefunden.");
+  });
+}
+
+// =====================================================================
+// WLAN
+// =====================================================================
+
+void saveWiFiSettings()
+{
+  preferences.begin("zhcwifi", false);
+  preferences.putBool("startup", wifiStartupEnabled);
+  preferences.putString("apPwd", apPassword);
+  preferences.end();
+}
+
+void loadWiFiSettings()
+{
+  preferences.begin("zhcwifi", true);
+
+  wifiStartupEnabled =
+    preferences.getBool("startup", false);
+
+  apPassword =
+    preferences.getString("apPwd", "");
+
+  preferences.end();
+
+  if (apPassword.length() < 8)
+  {
+    apPassword = "ZHC-" + randomToken(8);
+    saveWiFiSettings();
+  }
+}
+
+void printWiFiStatus()
+{
+  Serial.println();
+  Serial.println("============== WLAN STATUS ====================");
+
+  Serial.print("WLAN           : ");
+  Serial.println(wifiEnabled ? "EIN" : "AUS");
+
+  Serial.print("Startup        : ");
+  Serial.println(wifiStartupEnabled ? "EIN" : "AUS");
+
+  Serial.print("SSID           : ");
+  Serial.println(ZHC_AP_SSID);
+
+  Serial.print("AP-Passwort    : ");
+  Serial.println(apPassword);
+
+  Serial.print("Webserver      : ");
+  Serial.println(webServerRunning ? "AKTIV" : "AUS");
+
+  if (wifiEnabled)
+  {
+    Serial.print("IP             : ");
+    Serial.println(WiFi.softAPIP());
+    Serial.println("Web            : http://192.168.4.1");
+  }
+
+  Serial.println("================================================");
+}
+
+bool startZHCWiFi()
+{
+  if (wifiEnabled)
+    return true;
+
+  WiFi.mode(WIFI_AP);
