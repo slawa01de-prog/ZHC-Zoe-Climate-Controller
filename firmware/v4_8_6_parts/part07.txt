@@ -1,0 +1,800 @@
+
+  Serial.println();
+  Serial.println("---------- SICHERHEIT / LOGIN ----------");
+  Serial.println("Benutzer : admin");
+  Serial.print("Web Login: ");
+  Serial.println(passwordHash.length() == 64 ? "EINGERICHTET" : "NICHT EINGERICHTET");
+  Serial.print("Erstlogin: ");
+  Serial.println(forcePasswordChange ? "JA" : "NEIN");
+  Serial.print("Session  : ");
+  Serial.println(sessionToken.length() > 0 ? "AKTIV" : "KEINE");
+  Serial.println();
+  Serial.println(" 1  Login-Status");
+  Serial.println(" 2  Initialpasswort anzeigen");
+  Serial.println(" 3  Web-Session abmelden");
+  Serial.println(" 4  Web-Zugang lokal zuruecksetzen");
+  Serial.println(" 5  Recovery-Hinweis");
+  Serial.println();
+  Serial.println(" b  Zurueck");
+  Serial.println(" m  Hauptmenue");
+  Serial.println("---------------------------------------");
+  Serial.print("> ");
+}
+
+void printExpertCommands()
+{
+  Serial.println();
+  Serial.println("============= EXPERTENBEFEHLE =============");
+  Serial.println("Alle bisherigen Textbefehle funktionieren weiter.");
+  Serial.println("Beispiele:");
+  Serial.println(" status");
+  Serial.println(" analyse");
+  Serial.println(" sensor scan");
+  Serial.println(" sensor setup");
+  Serial.println(" assign low 0");
+  Serial.println(" assign outside none");
+  Serial.println(" target 21.0");
+  Serial.println(" kp 22");
+  Serial.println(" mode auto");
+  Serial.println(" fault reset");
+  Serial.println(" wifi on");
+  Serial.println(" wifi off");
+  Serial.println(" wifi status");
+  Serial.println(" wifi startup on");
+  Serial.println(" wifi startup off");
+  Serial.println(" security status");
+  Serial.println(" security reset");
+  Serial.println(" save");
+  Serial.println();
+  Serial.println("Fuer normale Bedienung: m");
+  Serial.println("============================================");
+  Serial.print("> ");
+}
+
+void printCurrentMenu()
+{
+  switch (currentMenu)
+  {
+    case MENU_MAIN:        printMainMenu(); break;
+    case MENU_STATUS:      printStatusMenu(); break;
+    case MENU_SENSORS:     printSensorMenu(); break;
+    case MENU_MODE:        printModeMenu(); break;
+    case MENU_TEMPERATURE: printTemperatureMenu(); break;
+    case MENU_CONTROLLER:  printControllerMenu(); break;
+    case MENU_STAGES:      printStageMenu(); break;
+    case MENU_LEARNING:    printLearningMenu(); break;
+    case MENU_ANALYSIS:    printAnalysisMenu(); break;
+    case MENU_SYSTEM:      printSystemMenu(); break;
+    case MENU_WIFI:        printWiFiMenu(); break;
+    case MENU_SECURITY:    printSecurityMenu(); break;
+  }
+}
+
+// Kleine Hilfsfunktion: Wert interaktiv abfragen.
+// Die Eingabe selbst wird weiterhin zeilenweise vom Terminal gelesen.
+// Wir verwenden dafuer einen "pending command".
+String pendingMenuCommand = "";
+
+void requestValue(const String &commandPrefix, const String &prompt)
+{
+  pendingMenuCommand = commandPrefix;
+
+  Serial.println();
+  Serial.print(prompt);
+  Serial.print(": ");
+}
+
+// Assignment helper
+void requestSensorAssignment(const String &role)
+{
+  printSensorScan();
+  Serial.println();
+  Serial.print("Index fuer ");
+  Serial.print(role);
+  Serial.println(" eingeben.");
+  Serial.println("Oder 'none' zum Deaktivieren.");
+  Serial.print("> ");
+
+  pendingMenuCommand = "assign " + role + " ";
+}
+
+void requestSensorUnassign()
+{
+  Serial.println();
+  Serial.println("Welche Rolle deaktivieren?");
+  Serial.println(" 1 LOW");
+  Serial.println(" 2 HIGH");
+  Serial.println(" 3 OUTSIDE");
+  Serial.println(" 4 SAFETY");
+  Serial.print("> ");
+
+  pendingMenuCommand = "__unassign__";
+}
+
+void requestOffset()
+{
+  Serial.println();
+  Serial.println("Welcher Offset?");
+  Serial.println(" 1 LOW");
+  Serial.println(" 2 HIGH");
+  Serial.println(" 3 OUTSIDE");
+  Serial.println(" 4 SAFETY");
+  Serial.print("> ");
+
+  pendingMenuCommand = "__offset_select__";
+}
+
+void processMenuInput(String input)
+{
+  input.trim();
+
+  if (input.length() == 0)
+  {
+    printCurrentMenu();
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Laufende Wert-/Wizard-Eingabe
+  // ----------------------------------------------------------
+
+  if (pendingMenuCommand.length() > 0)
+  {
+    String pending = pendingMenuCommand;
+    pendingMenuCommand = "";
+
+    if (pending == "__unassign__")
+    {
+      if (input == "1") processCommand("assign low none");
+      else if (input == "2") processCommand("assign high none");
+      else if (input == "3") processCommand("assign outside none");
+      else if (input == "4") processCommand("assign safety none");
+      else Serial.println("Ungueltige Auswahl.");
+
+      printSensorMenu();
+      return;
+    }
+
+    if (pending == "__offset_select__")
+    {
+      if (input == "1") requestValue("offset low ", "Offset LOW in K");
+      else if (input == "2") requestValue("offset high ", "Offset HIGH in K");
+      else if (input == "3") requestValue("offset outside ", "Offset OUTSIDE in K");
+      else if (input == "4") requestValue("offset safety ", "Offset SAFETY in K");
+      else
+      {
+        Serial.println("Ungueltige Auswahl.");
+        printSensorMenu();
+      }
+
+      return;
+    }
+
+    if (pending == "__weight_select__")
+    {
+      if (input == "1") requestValue("weight low ", "Weight LOW in %");
+      else if (input == "2") requestValue("weight high ", "Weight HIGH in %");
+      else
+      {
+        Serial.println("Ungueltige Auswahl.");
+        printSensorMenu();
+      }
+
+      return;
+    }
+
+    // Normale pending command:
+    processCommand(pending + input);
+    printCurrentMenu();
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Navigation jederzeit
+  // ----------------------------------------------------------
+
+  String low = input;
+  low.toLowerCase();
+
+  if (low == "m")
+  {
+    printMainMenu();
+    return;
+  }
+
+  if (low == "b")
+  {
+    printMainMenu();
+    return;
+  }
+
+  // Textbefehle bleiben als Expertenmodus erhalten.
+  // Wenn Eingabe keine reine Zahl ist, an alten Parser durchreichen.
+  bool numeric = true;
+
+  for (size_t i = 0; i < input.length(); i++)
+  {
+    if (!isDigit(input[i]))
+    {
+      numeric = false;
+      break;
+    }
+  }
+
+  if (!numeric)
+  {
+    if (low == "h")
+    {
+      printExpertCommands();
+      return;
+    }
+
+    processCommand(input);
+    Serial.println();
+    Serial.println("(m = Hauptmenue)");
+    Serial.print("> ");
+    return;
+  }
+
+  int choice = input.toInt();
+
+  // ----------------------------------------------------------
+  // Hauptmenue
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_MAIN)
+  {
+    switch (choice)
+    {
+      case 0: printStatus(); printMainMenu(); break;
+      case 1: printStatusMenu(); break;
+      case 2: printSensorMenu(); break;
+      case 3: printModeMenu(); break;
+      case 4: printTemperatureMenu(); break;
+      case 5: printControllerMenu(); break;
+      case 6: printStageMenu(); break;
+      case 7: printLearningMenu(); break;
+      case 8: printAnalysisMenu(); break;
+      case 9: printSystemMenu(); break;
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printMainMenu();
+        break;
+    }
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Status
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_STATUS)
+  {
+    switch (choice)
+    {
+      case 1: printStatus(); break;
+      case 2: printSensorStatus(); break;
+      case 3: printThermal(); break;
+      case 4: printDiagnostics(); break;
+      default: Serial.println("Ungueltige Auswahl."); break;
+    }
+
+    printStatusMenu();
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Sensoren
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_SENSORS)
+  {
+    switch (choice)
+    {
+      case 1:
+        printSensorStatus();
+        printSensorMenu();
+        break;
+
+      case 2:
+        printSensorScan();
+        printSensorMenu();
+        break;
+
+      case 3:
+        printSensorSetup();
+        printSensorMenu();
+        break;
+
+      case 4:
+        requestSensorAssignment("low");
+        break;
+
+      case 5:
+        requestSensorAssignment("high");
+        break;
+
+      case 6:
+        requestSensorAssignment("outside");
+        break;
+
+      case 7:
+        requestSensorAssignment("safety");
+        break;
+
+      case 8:
+        requestSensorUnassign();
+        break;
+
+      case 9:
+        Serial.println();
+        Serial.println("Aktuelle Gewichtung:");
+        Serial.print("LOW  = "); Serial.println(cfg.weightLow);
+        Serial.print("HIGH = "); Serial.println(cfg.weightHigh);
+        Serial.println();
+        Serial.println(" 1 LOW aendern");
+        Serial.println(" 2 HIGH aendern");
+        Serial.print("> ");
+        pendingMenuCommand = "__weight_select__";
+        break;
+
+      case 10:
+        requestOffset();
+        break;
+
+      case 11:
+        saveSettings();
+        printSensorMenu();
+        break;
+
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printSensorMenu();
+        break;
+    }
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Mode
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_MODE)
+  {
+    switch (choice)
+    {
+      case 1: setMode(MODE_OEM); break;
+      case 2: setMode(MODE_AUTO); break;
+      case 3: setMode(MODE_BOOST); break;
+      case 4: setMode(MODE_MANUAL); break;
+      case 5: manualStage = 0; setMode(MODE_MANUAL); break;
+      case 6: manualStage = 1; setMode(MODE_MANUAL); break;
+      case 7: manualStage = 2; setMode(MODE_MANUAL); break;
+      case 8: manualStage = 3; setMode(MODE_MANUAL); break;
+      default: Serial.println("Ungueltige Auswahl."); break;
+    }
+
+    printModeMenu();
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Temperatur
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_TEMPERATURE)
+  {
+    switch (choice)
+    {
+      case 1: requestValue("target ", "Neue Solltemperatur in C"); break;
+      case 2: requestValue("deadband ", "Neue Deadband in K"); break;
+      case 3: requestValue("restart ", "Neues Restart Delta in K"); break;
+      case 4: requestValue("weight low ", "Weight LOW in %"); break;
+      case 5: requestValue("weight high ", "Weight HIGH in %"); break;
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printTemperatureMenu();
+        break;
+    }
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Regler
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_CONTROLLER)
+  {
+    switch (choice)
+    {
+      case 1: requestValue("kp ", "Neuer Kp"); break;
+      case 2: requestValue("ki ", "Neuer Ki"); break;
+      case 3: requestValue("trendgain ", "Neuer Trend Gain"); break;
+      case 4: printStatus(); printControllerMenu(); break;
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printControllerMenu();
+        break;
+    }
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Heizstufen
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_STAGES)
+  {
+    switch (choice)
+    {
+      case 1: requestValue("threshold1 ", "Neuer Threshold 1"); break;
+      case 2: requestValue("threshold2 ", "Neuer Threshold 2"); break;
+      case 3: requestValue("threshold3 ", "Neuer Threshold 3"); break;
+      case 4: requestValue("mintime ", "Neue Mindestzeit in s"); break;
+      case 5: requestValue("stagedelay ", "Neuer Stage Delay in s"); break;
+      case 6: requestValue("boosttime ", "Neue Boost-Zeit in s"); break;
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printStageMenu();
+        break;
+    }
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Lernen
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_LEARNING)
+  {
+    switch (choice)
+    {
+      case 1:
+        cfg.learningEnabled = true;
+        Serial.println("Learning EIN");
+        printLearningMenu();
+        break;
+
+      case 2:
+        cfg.learningEnabled = false;
+        stopLearningMeasurement();
+        Serial.println("Learning AUS");
+        printLearningMenu();
+        break;
+
+      case 3:
+        printThermal();
+        printLearningMenu();
+        break;
+
+      case 4:
+        model = ThermalModel();
+        stopLearningMeasurement();
+        Serial.println("Lernmodell zurueckgesetzt.");
+        printLearningMenu();
+        break;
+
+      case 5:
+        requestValue("learnrate ", "Neue Learning Rate");
+        break;
+
+      case 6:
+        requestValue("learntime ", "Neue Learning Messzeit in s");
+        break;
+
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printLearningMenu();
+        break;
+    }
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Analyse
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_ANALYSIS)
+  {
+    switch (choice)
+    {
+      case 1: printAnalysis(); break;
+      case 2: printDiagnostics(); break;
+      case 3: printFaultHistory(); break;
+      case 4: printLastStoredFault(); break;
+      case 5: resetFault(); break;
+      default: Serial.println("Ungueltige Auswahl."); break;
+    }
+
+    printAnalysisMenu();
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // System
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_SYSTEM)
+  {
+    switch (choice)
+    {
+      case 1:
+        printWiFiMenu();
+        break;
+
+      case 2:
+        printSecurityMenu();
+        break;
+
+      case 3:
+        saveSettings();
+        printSystemMenu();
+        break;
+
+      case 4:
+        loadDefaults();
+        printSystemMenu();
+        break;
+
+      case 5:
+        forceOutputsOff();
+        Serial.println("Neustart...");
+        delay(300);
+        ESP.restart();
+        break;
+
+      case 6:
+        printStatus();
+        printSystemMenu();
+        break;
+
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printSystemMenu();
+        break;
+    }
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // WLAN
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_WIFI)
+  {
+    switch (choice)
+    {
+      case 1:
+        startZHCWiFi();
+        printWiFiMenu();
+        break;
+
+      case 2:
+        stopZHCWiFi();
+        printWiFiMenu();
+        break;
+
+      case 3:
+        printWiFiStatus();
+        printWiFiMenu();
+        break;
+
+      case 4:
+        wifiStartupEnabled = true;
+        saveWiFiSettings();
+        Serial.println("WLAN Startup = EIN");
+        printWiFiMenu();
+        break;
+
+      case 5:
+        wifiStartupEnabled = false;
+        saveWiFiSettings();
+        Serial.println("WLAN Startup = AUS");
+        printWiFiMenu();
+        break;
+
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printWiFiMenu();
+        break;
+    }
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // Sicherheit
+  // ----------------------------------------------------------
+
+  if (currentMenu == MENU_SECURITY)
+  {
+    switch (choice)
+    {
+      case 1:
+        Serial.println();
+        Serial.println("Login-Status:");
+        Serial.println(" Benutzer: admin");
+        Serial.print(" Erstlogin erforderlich: ");
+        Serial.println(forcePasswordChange ? "JA" : "NEIN");
+        Serial.print(" Session aktiv: ");
+        Serial.println(sessionToken.length() > 0 ? "JA" : "NEIN");
+        printSecurityMenu();
+        break;
+
+      case 2:
+        Serial.println();
+        if (forcePasswordChange && temporaryPassword.length() > 0)
+        {
+          Serial.println("Benutzer       : admin");
+          Serial.print("Initialpasswort: ");
+          Serial.println(temporaryPassword);
+        }
+        else
+        {
+          Serial.println("Kein Initialpasswort aktiv.");
+          Serial.println("Das gesetzte Admin-Passwort wird nie angezeigt.");
+        }
+        printSecurityMenu();
+        break;
+
+      case 3:
+        invalidateWebSession();
+        Serial.println("Web-Session abgemeldet.");
+        printSecurityMenu();
+        break;
+
+      case 4:
+        resetWebCredentials();
+        printSecurityMenu();
+        break;
+
+      case 5:
+        Serial.println();
+        Serial.println("Lokaler Recovery:");
+        Serial.println("- Beim Einschalten den lokalen Taster ca. 8 s halten.");
+        Serial.println("- Es werden NUR Web-Zugangsdaten zurueckgesetzt.");
+        Serial.println("- Sensor-/Regler-/Lernwerte bleiben erhalten.");
+        Serial.println("- Neues Initialpasswort erscheint im Terminal.");
+        printSecurityMenu();
+        break;
+
+      default:
+        Serial.println("Ungueltige Auswahl.");
+        printSecurityMenu();
+        break;
+    }
+
+    return;
+  }
+}
+
+
+void printServiceStatus()
+{
+  serviceBenchTests();
+
+  Serial.println();
+  Serial.println("================ SERVICE STATUS ================");
+  Serial.print("H1 GPIO8 : ");
+  Serial.println(digitalRead(HEATER1_OUT) ? "HIGH" : "LOW");
+  Serial.print("H2 GPIO9 : ");
+  Serial.println(digitalRead(HEATER2_OUT) ? "HIGH" : "LOW");
+  Serial.print("H3 GPIO10: ");
+  Serial.println(digitalRead(HEATER3_OUT) ? "HIGH" : "LOW");
+
+  Serial.print("Test aktiv: ");
+  Serial.println(serviceOutputTestActive ? "JA" : "NEIN");
+
+  if (serviceOutputTestActive)
+  {
+    Serial.print("Kanal     : ");
+    if (serviceOutputMask == 0x01) Serial.println("H1 / GPIO8");
+    else if (serviceOutputMask == 0x02) Serial.println("H2 / GPIO9");
+    else if (serviceOutputMask == 0x04) Serial.println("H3 / GPIO10");
+    else Serial.println("UNBEKANNT");
+
+    Serial.print("Restzeit  : ");
+    Serial.print(serviceOutputRemainingMs() / 1000.0f, 1);
+    Serial.println(" s");
+  }
+
+  Serial.print("Taster    : ");
+  Serial.println(digitalRead(PIN_BUTTON) == LOW ? "GEDRUECKT / LOW" : "FREI / HIGH");
+
+  Serial.print("Sensoren  : ");
+  Serial.println(discoveredSensorCount);
+
+  Serial.print("Safety    : ");
+  Serial.println(faultLatched ? "LOCK AKTIV" : "OK");
+  Serial.println("================================================");
+}
+
+void terminalServiceOutput(uint8_t mask, uint32_t durationSec)
+{
+  if (!validServiceDuration(durationSec))
+  {
+    Serial.println("Ungueltige Dauer. Erlaubt: 5, 10, 30 oder 60 Sekunden.");
+    return;
+  }
+
+  if (startServiceOutputTest(mask, durationSec))
+  {
+    Serial.print("Service-Test gestartet: ");
+    if (mask == 0x01) Serial.print("H1 / GPIO8");
+    else if (mask == 0x02) Serial.print("H2 / GPIO9");
+    else if (mask == 0x04) Serial.print("H3 / GPIO10");
+    Serial.print(" fuer ");
+    Serial.print(durationSec);
+    Serial.println(" s");
+  }
+  else
+  {
+    Serial.println("Service-Test gesperrt: Safety-Lock, FAILSAFE oder OTA aktiv.");
+  }
+}
+
+void enterOemModeImmediate(const char* reason)
+{
+  currentMode = MODE_OEM;
+  boostStartMillis = 0;
+  stopServiceOutputTest();
+  allOutputsOffImmediate();
+
+  if (reason && reason[0] != '\0')
+  {
+    Serial.print("[OEM] Sofortabschaltung: ");
+    Serial.println(reason);
+  }
+}
+
+// =====================================================================
+// COMMAND PARSER
+// =====================================================================
+
+void processCommand(String cmd)
+{
+  cmd.trim();
+  cmd.toLowerCase();
+
+  // -----------------------------------------------------------
+  // Allgemein
+  // -----------------------------------------------------------
+
+  if (cmd == "menu")
+  {
+    printMainMenu();
+  }
+  else if (cmd == "help")
+  {
+    printExpertCommands();
+  }
+  else if (cmd == "status")
+  {
+    printStatus();
+  }
+  else if (cmd == "analyse")
+  {
+    printAnalysis();
+  }
+  else if (cmd == "analyse history")
+  {
+    printFaultHistory();
+  }
+  else if (cmd == "analyse last")
+  {
+    printLastStoredFault();
+  }
+  else if (cmd == "diag")
+  {
+    printDiagnostics();
+  }
+  else if (cmd == "thermal")
+  {
+    printThermal();
